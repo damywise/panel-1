@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # panel_macos imports the experimental windowing API
+      # (package:flutter/src/widgets/_window.dart), which only exists on the
+      # main/master channel — so analysis needs master even on Linux.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: master
+
+      # Pin melos to the major used by melos.yaml (v2 reads `name:`/`packages:`).
+      - name: Activate melos
+        run: dart pub global activate melos 2.9.0
+
+      - name: Bootstrap workspace
+        run: melos bootstrap
+
+      - name: Analyze (all packages)
+        run: melos exec -- flutter analyze
+
+      - name: Format check (core)
+        run: melos exec --scope="panel" -- dart format --output=none --set-exit-if-changed .
+
+      - name: Test (packages that have tests)
+        run: melos exec --dir-exists="test" -- flutter test
