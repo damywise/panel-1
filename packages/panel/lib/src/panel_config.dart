@@ -34,6 +34,10 @@ class PanelTheme {
     required this.overlayBackground,
     this.tabTextStyle,
     this.titleTextStyle,
+    this.tabRadius = BorderRadius.zero,
+    this.tabUnderlineThickness = 2.0,
+    this.showPanelBorder = true,
+    this.tabDividerThickness = 1.0,
   });
 
   /// Workspace background (gaps, empty center).
@@ -74,6 +78,23 @@ class PanelTheme {
   /// Optional text styles for tab labels / floating titles.
   final TextStyle? tabTextStyle;
   final TextStyle? titleTextStyle;
+
+  /// Corner radius of tabs. Non-zero gives rounded / pill-shaped tabs; when set,
+  /// the selected tab is indicated by its [tabActive] fill rather than an
+  /// underline (a uniform radius and a single-side border can't coexist).
+  final BorderRadius tabRadius;
+
+  /// Thickness of the accent underline under the selected tab (square tabs).
+  /// Set to 0 to drop the underline indicator.
+  final double tabUnderlineThickness;
+
+  /// Whether panels draw a resting [border]. The focus ring (accent) still
+  /// shows when a group is focused. Set false to skip the border decoration.
+  final bool showPanelBorder;
+
+  /// Thickness of the divider between a tab strip and its content (drawn in
+  /// [border]). Set to 0 to drop the divider, or raise it for a heavier rule.
+  final double tabDividerThickness;
 
   /// A neutral light palette (no Material surface tint).
   factory PanelTheme.light() => const PanelTheme(

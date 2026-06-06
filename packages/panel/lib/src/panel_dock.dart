@@ -250,7 +250,10 @@ class PanelGroup extends StatelessWidget {
     final Widget group = DecoratedBox(
       decoration: BoxDecoration(
         color: t.surface,
-        border: Border.all(color: focused ? t.accent : t.border, width: focused ? 1.5 : 1),
+        // Focus ring always shows; the resting hairline is themeable away.
+        border: focused
+            ? Border.all(color: t.accent, width: 1.5)
+            : (t.showPanelBorder ? Border.all(color: t.border, width: 1) : null),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -264,7 +267,7 @@ class PanelGroup extends StatelessWidget {
             canSplit: panels.length >= 2,
             onDetach: onDetach,
           ),
-          Container(height: 1, color: t.border),
+          if (t.tabDividerThickness > 0) Container(height: t.tabDividerThickness, color: t.border),
           Expanded(
             child: active == null
                 ? const SizedBox.shrink()
@@ -276,7 +279,7 @@ class PanelGroup extends StatelessWidget {
 
     // The drop-zone overlay covers only the body (below the tab strip), leaving
     // the strip free for tab drag-to-reorder targets.
-    final double stripH = manager.config.tabStripHeight + 1;
+    final double stripH = manager.config.tabStripHeight + t.tabDividerThickness;
     final Widget body = !manager.isDragging
         ? group
         : Stack(
@@ -542,13 +545,20 @@ class _TabLabel extends StatelessWidget {
     final PanelTheme t = spec.theme;
     final Color bg = spec.selected ? t.tabActive : (spec.hovered ? t.tabHover : const Color(0x00000000));
     final TextStyle base = t.tabTextStyle ?? const TextStyle(fontSize: 13);
+    // Rounded/pill tabs indicate selection by fill (a uniform radius can't be
+    // combined with a single-side underline); square tabs use the underline.
+    final bool rounded = t.tabRadius != BorderRadius.zero;
     return AnimatedContainer(
       duration: duration,
       curve: Curves.easeOut,
+      margin: rounded ? const EdgeInsets.symmetric(vertical: 4, horizontal: 2) : EdgeInsets.zero,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: bg,
-        border: Border(bottom: BorderSide(color: spec.selected ? t.accent : const Color(0x00000000), width: 2)),
+        borderRadius: rounded ? t.tabRadius : null,
+        border: (!rounded && t.tabUnderlineThickness > 0)
+            ? Border(bottom: BorderSide(color: spec.selected ? t.accent : const Color(0x00000000), width: t.tabUnderlineThickness))
+            : null,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
