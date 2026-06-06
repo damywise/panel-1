@@ -1,0 +1,24 @@
+name: panel_example
+description: Example workspace app for package:panel + package:panel_macos.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.0-177.0.dev
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  panel:
+    path: ../packages/panel
+  panel_macos:
+    path: ../packages/panel_macos
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

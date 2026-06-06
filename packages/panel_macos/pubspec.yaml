@@ -1,0 +1,37 @@
+name: panel_macos
+description: >-
+  macOS backend for package:panel — detachable panels as real borderless OS
+  windows with native chrome and drag-back snapping (Flutter windowing + FFI).
+version: 0.1.0
+repository: https://github.com/your-org/panel
+issue_tracker: https://github.com/your-org/panel/issues
+topics:
+  - macos
+  - windowing
+  - panels
+  - ffi
+
+environment:
+  sdk: ^3.13.0-177.0.dev
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+  # Hosted version for publishing; melos rewrites this to a local path override
+  # (pubspec_overrides.yaml) during `melos bootstrap` for in-repo development.
+  panel: ^0.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  ffigen: ^20.1.1
+
+flutter:
+  uses-material-design: true
+  plugin:
+    platforms:
+      macos:
+        pluginClass: PanelMacosPlugin

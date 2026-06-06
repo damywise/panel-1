@@ -1,0 +1,17 @@
+name: panel_workspace
+
+# Excludes docs/ (the Jaspr site has its own SDK constraints).
+packages:
+  - packages/**
+  - example
+
+command:
+  bootstrap:
+    usePubspecOverrides: true
+
+scripts:
+  analyze:
+    description: Analyze all packages.
+    run: flutter analyze
+    exec:
+      concurrency: 1

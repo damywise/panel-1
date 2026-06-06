@@ -1,0 +1,32 @@
+name: panel
+description: >-
+  IDE-style dockable, tabbed and splittable panel framework for Flutter.
+  Platform-generic and web-capable; detachable OS windows via a pluggable
+  backend (see package:panel_macos).
+version: 0.1.0
+repository: https://github.com/your-org/panel
+issue_tracker: https://github.com/your-org/panel/issues
+topics:
+  - ui
+  - widgets
+  - docking
+  - panels
+  - desktop
+
+environment:
+  # Core is platform-generic and web-capable; it needs no master-only features,
+  # so it targets a broad stable range (consumable by e.g. a Jaspr web app).
+  sdk: '>=3.7.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
