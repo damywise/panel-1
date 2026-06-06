@@ -1,7 +1,11 @@
-# Panel — monorepo
+# Panel
+
+See demo at https://roszkowski.dev/panel
 
 IDE-style dockable / tabbed / splittable / detachable panels for Flutter, split
 into a platform-generic core and a macOS backend (Melos workspace).
+
+Support for multi-window Flutter apps on macOS.
 
 ```
 packages/
