@@ -26,6 +26,10 @@ void main() {
   // with the provided parameters and components.
   runApp(Document(
     title: 'Panel - How it works',
+    // Sets <base href> and normalizes asset paths. Defaults to root for local
+    // dev; CI passes the GitHub Pages project subpath via
+    // `--dart-define=BASE_HREF=/<repo>/` (see .github/workflows/deploy-docs.yml).
+    base: const String.fromEnvironment('BASE_HREF', defaultValue: '/'),
     head: [
       // Deck styling + scroll/keyboard behavior (see web/deck.css, web/deck.js).
       link(rel: 'stylesheet', href: 'deck.css'),

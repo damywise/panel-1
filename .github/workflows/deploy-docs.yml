@@ -1,0 +1,67 @@
+name: Deploy docs
+
+# Builds the Jaspr docs site (docs/docs) and deploys it to GitHub Pages.
+# Manual only: trigger from the Actions tab ("Run workflow").
+#
+# One-time setup: repo Settings → Pages → Build and deployment → Source =
+# "GitHub Actions". For a custom domain or a <user>.github.io repo (served at
+# the root), run the workflow with base_href = "/".
+on:
+  workflow_dispatch:
+    inputs:
+      base_href:
+        description: 'Base href for the site. Empty = /<repo>/ (project Pages). Use "/" for a custom domain / user page.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter config --enable-web
+
+      # jaspr CLI, pinned to match the project's jaspr ^0.23.x.
+      - run: dart pub global activate jaspr_cli 0.23.1
+
+      - name: Resolve dependencies
+        working-directory: docs/docs
+        run: flutter pub get
+
+      - name: Build static site
+        working-directory: docs/docs
+        run: |
+          base="${{ github.event.inputs.base_href }}"
+          if [ -z "$base" ]; then base="/${{ github.event.repository.name }}/"; fi
+          echo "Building with base href: $base"
+          dart pub global run jaspr_cli:jaspr build --dart-define=BASE_HREF="$base"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/docs/build/jaspr
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
