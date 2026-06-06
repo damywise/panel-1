@@ -133,4 +133,11 @@ const String blockC = r'''
   <p>Everything else, splits, theming, persistence and shortcuts, is plain Dart, so the core compiles to web too. The live docks on this page are <code>package:panel</code> running in your browser, embedded with <code>jaspr_flutter_embed</code>.</p>
   <p class="muted">See <code>MANUAL.md</code> for the full build guide and the package READMEs for the API.</p>
 </section>
+
+<section data-title="Subscribe">
+  <div class="kicker">Stay in the loop</div>
+  <h2>Occasional Flutter</h2>
+  <p>Notes on Flutter, native-interop, multi-window, and building things like this.</p>
+  <iframe src="https://occasionalflutter.substack.com/embed?transparent=1&light=1" width="480" height="150" style="border: 1px solid #EEE;" frameborder="0" scrolling="no"></iframe>
+</section>
 ''';
