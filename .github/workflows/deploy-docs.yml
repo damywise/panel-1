@@ -12,7 +12,7 @@ on:
       base_href:
         description: 'Base href for the site. Empty = /<repo>/ (project Pages). Use "/" for a custom domain / user page.'
         required: false
-        default: ''
+        default: '/panel/'
 
 permissions:
   contents: read
