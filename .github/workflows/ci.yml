@@ -14,7 +14,7 @@ jobs:
   analyze-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # panel_macos imports the experimental windowing API
       # (package:flutter/src/widgets/_window.dart), which only exists on the

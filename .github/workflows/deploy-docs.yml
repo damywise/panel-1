@@ -28,14 +28,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          cache: true
+          cache: true # caches the Flutter SDK
 
       - run: flutter config --enable-web
+
+      # Cache downloaded pub packages + the globally-activated jaspr_cli.
+      # (Build artifacts — build_runner/dart2js/flutter-web — are intentionally
+      # not cached; cross-run reuse there is unreliable and risks stale output.)
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('docs/docs/pubspec.lock', 'packages/panel/pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
 
       # jaspr CLI, pinned to match the project's jaspr ^0.23.x.
       - run: dart pub global activate jaspr_cli 0.23.1
