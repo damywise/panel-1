@@ -1,0 +1,120 @@
+:root{
+  --bg:#1e1f22; --bg2:#26282c; --bar:#2b2d31; --border:#3a3d42;
+  --text:#e6e7e9; --muted:#9aa0a6; --accent:#5b9df7; --accent2:#8ae234;
+  --mono:'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+
+/* progress bar */
+#progress{position:fixed;top:0;left:0;height:3px;width:0;background:var(--accent);z-index:50;transition:width .1s linear}
+
+/* slide container */
+main{height:100vh;overflow-y:scroll;scroll-snap-type:y proximity;scroll-padding-top:0}
+section{min-height:100vh;scroll-snap-align:start;display:flex;flex-direction:column;justify-content:center;
+  padding:7vh 8vw;position:relative;border-bottom:1px solid var(--border)}
+section:nth-child(even){background:var(--bg2)}
+
+.kicker{font-family:var(--mono);font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+h1{font-size:clamp(34px,6vw,64px);line-height:1.05;letter-spacing:-.02em;margin-bottom:18px}
+h2{font-size:clamp(26px,4vw,40px);line-height:1.1;letter-spacing:-.01em;margin-bottom:18px}
+p{font-size:clamp(15px,1.6vw,19px);color:var(--text);max-width:70ch;margin-bottom:14px}
+p.lede{font-size:clamp(18px,2.2vw,24px);color:var(--muted)}
+.muted{color:var(--muted)}
+strong{color:#fff}
+.accent{color:var(--accent)}
+ul{max-width:70ch;margin:6px 0 14px 0;padding-left:0;list-style:none}
+li{font-size:clamp(15px,1.6vw,18px);margin:10px 0;padding-left:26px;position:relative;color:var(--text)}
+li::before{content:'';position:absolute;left:4px;top:11px;width:8px;height:8px;border-radius:2px;background:var(--accent)}
+
+pre{background:#141518;border:1px solid var(--border);border-radius:10px;padding:18px 20px;overflow:auto;
+  font-family:var(--mono);font-size:14px;line-height:1.55;color:#cfd3da;max-width:80ch;margin:8px 0 14px}
+pre .c{color:#6b7280}
+pre .k{color:#5b9df7}
+pre .s{color:#8ae234}
+pre .t{color:#e5c07b}
+code{font-family:var(--mono);font-size:.92em;background:#141518;border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:#cfd3da}
+
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));max-width:980px;margin-top:10px}
+.card{background:#141518;border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+.card h3{font-family:var(--mono);font-size:14px;color:var(--accent);margin-bottom:8px}
+.card p{font-size:14px;color:var(--muted);margin:0}
+
+.tag{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--muted);border:1px solid var(--border);
+  border-radius:999px;padding:3px 12px;margin:4px 8px 4px 0}
+
+/* nav dots */
+nav{position:fixed;right:22px;top:50%;transform:translateY(-50%);z-index:50;display:flex;flex-direction:column;gap:12px}
+nav a{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--muted);opacity:.5;transition:all .2s;display:block;position:relative}
+nav a.active{background:var(--accent);border-color:var(--accent);opacity:1;transform:scale(1.15)}
+nav a span{position:absolute;right:20px;top:50%;transform:translateY(-50%);white-space:nowrap;font-size:12px;
+  font-family:var(--mono);color:var(--muted);opacity:0;pointer-events:none;transition:opacity .2s;background:var(--bar);
+  border:1px solid var(--border);padding:2px 8px;border-radius:6px}
+nav a:hover span{opacity:1}
+
+.hint{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:50;font-family:var(--mono);font-size:12px;
+  color:var(--muted);opacity:.7;animation:bob 1.8s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(5px)}}
+
+/* live flutter embed.
+   The Flutter view sizes to its host element (no ViewConstraints), so the
+   .embed-stage just fills the responsive .embed box. The demo scales its fixed
+   920x560 design to fit with a Flutter FittedBox (correct hit-testing); we do
+   NOT CSS-transform the host (Flutter ignores that when mapping pointers). */
+.embed{position:relative;width:min(920px,100%);aspect-ratio:920 / 560;margin:10px auto 0;
+  border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg2);
+  box-shadow:0 18px 40px rgba(0,0,0,.4)}
+.embed-stage{position:absolute;inset:0}
+/* jaspr_flutter_embed wraps the view in nested host divs; force the whole
+   chain to fill the box so the flutter-view doesn't collapse to 0 height. */
+.embed-stage > div,.embed-stage > div > div{width:100%;height:100%}
+.embed-stage flt-flutter-view,.embed-stage flutter-view,.embed-stage flt-glass-pane{width:100%;height:100%}
+
+/* dock mock */
+.mock{display:flex;flex-direction:column;width:min(620px,86vw);height:300px;border:1px solid var(--border);
+  border-radius:10px;overflow:hidden;background:var(--bg2);box-shadow:0 18px 40px rgba(0,0,0,.4);margin-top:8px}
+.mock .titlebar{height:26px;background:var(--bar);display:flex;align-items:center;gap:7px;padding:0 12px;border-bottom:1px solid var(--border)}
+.mock .dot{width:11px;height:11px;border-radius:50%}
+.mock .row{flex:1;display:flex;min-height:0}
+.mock .col{display:flex;flex-direction:column;min-width:0}
+.mock .tabs{height:28px;background:var(--bar);display:flex;align-items:center;border-bottom:1px solid var(--border)}
+.mock .tab{font-family:var(--mono);font-size:11px;color:var(--muted);padding:0 12px;height:100%;display:flex;align-items:center;border-right:1px solid var(--border)}
+.mock .tab.on{color:var(--text);background:var(--bg2);box-shadow:inset 0 -2px 0 var(--accent)}
+.mock .body{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:11px;background:var(--bg)}
+.mock .left{width:120px;border-right:1px solid var(--border)}
+.mock .right{width:130px;border-left:1px solid var(--border)}
+.mock .bottom{height:64px;border-top:1px solid var(--border)}
+.mock .ghost{outline:2px solid var(--accent);outline-offset:-4px;background:rgba(91,157,247,.18)}
+
+.kbd{font-family:var(--mono);font-size:13px;background:var(--bar);border:1px solid var(--border);border-bottom-width:2px;
+  border-radius:6px;padding:2px 8px;color:var(--text)}
+
+/* inline reference links (nav dots are scoped to `nav a`, so unaffected) */
+section a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
+section a:hover{border-bottom-color:var(--accent)}
+
+/* pop-out SVG animation: a panel detaching into its own window and snapping back */
+.popsvg{display:block;width:min(460px,82vw);height:auto;margin:10px 0 16px}
+.popsvg .ps-win,.popsvg .ps-popwin{fill:var(--bg2);stroke:var(--border)}
+.popsvg .ps-popwin{stroke:var(--accent);stroke-opacity:.7}
+.popsvg .ps-col{fill:var(--bar)}
+.popsvg .ps-sep{stroke:var(--border)}
+.popsvg .ps-acc{fill:var(--accent)}
+.popsvg .ps-line{fill:var(--muted)}
+.popsvg .ps-dot.ps-r{fill:#ff5f57}.popsvg .ps-dot.ps-y{fill:#febc2e}.popsvg .ps-dot.ps-g{fill:#28c840}
+.popsvg .ps-shadow{fill:#000;opacity:0}
+.popsvg .ps-slot{fill:none;stroke:var(--accent);stroke-dasharray:5 4;opacity:0}
+.popsvg .ps-snap{fill:var(--accent);opacity:0}
+.popsvg .ps-pop{animation:psPop 6s ease-in-out infinite}
+.popsvg .ps-slot{animation:psSlot 6s ease-in-out infinite}
+.popsvg .ps-shadow{animation:psShadow 6s ease-in-out infinite}
+.popsvg .ps-snap{animation:psSnap 6s ease-in-out infinite}
+@keyframes psPop{0%,10%{transform:translate(0,0)}26%,54%{transform:translate(150px,-20px)}74%,100%{transform:translate(0,0)}}
+@keyframes psSlot{0%,14%{opacity:0}26%,66%{opacity:1}76%,100%{opacity:0}}
+@keyframes psShadow{0%,12%{opacity:0}26%,60%{opacity:.28}74%,100%{opacity:0}}
+@keyframes psSnap{0%,70%{opacity:0}77%{opacity:.75}90%,100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){
+  .popsvg .ps-pop,.popsvg .ps-slot,.popsvg .ps-shadow,.popsvg .ps-snap{animation:none}
+}

@@ -1,0 +1,37 @@
+name: docs
+description: A new Jaspr project
+version: 0.0.1
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+     sdk: flutter
+  jaspr: ^0.23.1
+  jaspr_flutter_embed: ^0.4.11
+  jaspr_router: ^0.8.2
+  # Flutter web/CanvasKit can't use OS-installed fonts, so the embedded code
+  # samples need a real font the engine loads. google_fonts registers one at
+  # runtime (web-friendly), avoiding a bundled TTF asset.
+  google_fonts: ^6.2.1
+  # The platform-generic core, embedded as a live Flutter-web demo.
+  panel:
+    path: ../../packages/panel
+
+dev_dependencies:
+  build_runner: ^2.10.0
+  build_web_compilers: ^4.8.0
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
+  jaspr_builder: ^0.23.1
+
+jaspr:
+  mode: static
+  flutter: embedded
+  # Static pre-render server port. 8080 is taken by OrbStack on this machine.
+  port: 8137
+
+flutter:
+  uses-material-design: true

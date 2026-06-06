@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Panes — How it works</title>
+<style>
+  :root{
+    --bg:#1e1f22; --bg2:#26282c; --bar:#2b2d31; --border:#3a3d42;
+    --text:#e6e7e9; --muted:#9aa0a6; --accent:#5b9df7; --accent2:#8ae234;
+    --mono:'SF Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+
+  /* progress bar */
+  #progress{position:fixed;top:0;left:0;height:3px;width:0;background:var(--accent);z-index:50;transition:width .1s linear}
+
+  /* slide container */
+  main{height:100vh;overflow-y:scroll;scroll-snap-type:y proximity;scroll-padding-top:0}
+  section{min-height:100vh;scroll-snap-align:start;display:flex;flex-direction:column;justify-content:center;
+    padding:7vh 8vw;position:relative;border-bottom:1px solid var(--border)}
+  section:nth-child(even){background:var(--bg2)}
+
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+  h1{font-size:clamp(34px,6vw,64px);line-height:1.05;letter-spacing:-.02em;margin-bottom:18px}
+  h2{font-size:clamp(26px,4vw,40px);line-height:1.1;letter-spacing:-.01em;margin-bottom:18px}
+  p{font-size:clamp(15px,1.6vw,19px);color:var(--text);max-width:70ch;margin-bottom:14px}
+  p.lede{font-size:clamp(18px,2.2vw,24px);color:var(--muted)}
+  .muted{color:var(--muted)}
+  strong{color:#fff}
+  .accent{color:var(--accent)}
+  ul{max-width:70ch;margin:6px 0 14px 0;padding-left:0;list-style:none}
+  li{font-size:clamp(15px,1.6vw,18px);margin:10px 0;padding-left:26px;position:relative;color:var(--text)}
+  li::before{content:'';position:absolute;left:4px;top:11px;width:8px;height:8px;border-radius:2px;background:var(--accent)}
+
+  pre{background:#141518;border:1px solid var(--border);border-radius:10px;padding:18px 20px;overflow:auto;
+    font-family:var(--mono);font-size:14px;line-height:1.55;color:#cfd3da;max-width:80ch;margin:8px 0 14px}
+  pre .c{color:#6b7280}   /* comment */
+  pre .k{color:#5b9df7}   /* keyword */
+  pre .s{color:#8ae234}   /* string */
+  pre .t{color:#e5c07b}   /* type */
+  code{font-family:var(--mono);font-size:.92em;background:#141518;border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:#cfd3da}
+
+  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));max-width:980px;margin-top:10px}
+  .card{background:#141518;border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+  .card h3{font-family:var(--mono);font-size:14px;color:var(--accent);margin-bottom:8px}
+  .card p{font-size:14px;color:var(--muted);margin:0}
+
+  .tag{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--muted);border:1px solid var(--border);
+    border-radius:999px;padding:3px 12px;margin:4px 8px 4px 0}
+
+  /* nav dots */
+  nav{position:fixed;right:22px;top:50%;transform:translateY(-50%);z-index:50;display:flex;flex-direction:column;gap:12px}
+  nav a{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--muted);opacity:.5;transition:all .2s;display:block;position:relative}
+  nav a.active{background:var(--accent);border-color:var(--accent);opacity:1;transform:scale(1.15)}
+  nav a span{position:absolute;right:20px;top:50%;transform:translateY(-50%);white-space:nowrap;font-size:12px;
+    font-family:var(--mono);color:var(--muted);opacity:0;pointer-events:none;transition:opacity .2s;background:var(--bar);
+    border:1px solid var(--border);padding:2px 8px;border-radius:6px}
+  nav a:hover span{opacity:1}
+
+  .hint{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:50;font-family:var(--mono);font-size:12px;
+    color:var(--muted);opacity:.7;animation:bob 1.8s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(5px)}}
+
+  /* dock mock */
+  .mock{display:flex;flex-direction:column;width:min(620px,86vw);height:300px;border:1px solid var(--border);
+    border-radius:10px;overflow:hidden;background:var(--bg2);box-shadow:0 18px 40px rgba(0,0,0,.4);margin-top:8px}
+  .mock .titlebar{height:26px;background:var(--bar);display:flex;align-items:center;gap:7px;padding:0 12px;border-bottom:1px solid var(--border)}
+  .mock .dot{width:11px;height:11px;border-radius:50%}
+  .mock .row{flex:1;display:flex;min-height:0}
+  .mock .col{display:flex;flex-direction:column;min-width:0}
+  .mock .tabs{height:28px;background:var(--bar);display:flex;align-items:center;border-bottom:1px solid var(--border)}
+  .mock .tab{font-family:var(--mono);font-size:11px;color:var(--muted);padding:0 12px;height:100%;display:flex;align-items:center;border-right:1px solid var(--border)}
+  .mock .tab.on{color:var(--text);background:var(--bg2);box-shadow:inset 0 -2px 0 var(--accent)}
+  .mock .body{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:11px;background:var(--bg)}
+  .mock .left{width:120px;border-right:1px solid var(--border)}
+  .mock .right{width:130px;border-left:1px solid var(--border)}
+  .mock .bottom{height:64px;border-top:1px solid var(--border)}
+  .mock .ghost{outline:2px solid var(--accent);outline-offset:-4px;background:rgba(91,157,247,.18)}
+
+  .kbd{font-family:var(--mono);font-size:13px;background:var(--bar);border:1px solid var(--border);border-bottom-width:2px;
+    border-radius:6px;padding:2px 8px;color:var(--text)}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<nav id="dots"></nav>
+<div class="hint">scroll / ↓ / space</div>
+
+<main id="deck">
+
+  <!-- 1 -->
+  <section data-title="Panes">
+    <div class="kicker">A Flutter desktop micro-framework</div>
+    <h1>Panes</h1>
+    <p class="lede">Dockable, splittable, detachable panels — like an IDE — built on Flutter's experimental multi‑window APIs plus a thin native AppKit layer on macOS.</p>
+    <div>
+      <span class="tag">drag tabs to dock &amp; split</span>
+      <span class="tag">tear off into real OS windows</span>
+      <span class="tag">drag back to snap in</span>
+      <span class="tag">themeable · persistable · keyboard‑driven</span>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section data-title="The catch">
+    <div class="kicker">Step 1 · The constraint</div>
+    <h2>Multi‑window is experimental</h2>
+    <p>Everything hangs off Flutter's windowing APIs, which only exist on the <strong>main/master</strong> channel and are <code>@internal</code>. Three hard facts shaped every decision:</p>
+    <ul>
+      <li>The APIs live in a private file — you import it and silence two analyzer rules.</li>
+      <li>On macOS you <strong>cannot</strong> create a borderless window through Flutter (<code>decorated:false</code> throws) — so "no title bar" is done natively.</li>
+      <li>Regular windows expose <strong>no screen position</strong> — so drag‑back‑to‑snap needs native window tracking.</li>
+    </ul>
+    <pre><span class="c">// every file that touches the windowing APIs starts with:</span>
+<span class="c">// ignore_for_file: invalid_use_of_internal_member</span>
+<span class="c">// ignore_for_file: implementation_imports</span>
+<span class="k">import</span> <span class="s">'package:flutter/src/widgets/_window.dart'</span>;</pre>
+  </section>
+
+  <!-- 3 -->
+  <section data-title="Enable &amp; run">
+    <div class="kicker">Step 2 · Turn it on</div>
+    <h2>Enable the feature, then run</h2>
+    <p>Windowing is a build‑time framework flag — it can't be set via <code>--dart-define</code>. Flip it once with <code>flutter config</code>:</p>
+    <pre><span class="c"># once</span>
+fvm flutter config --enable-windowing
+
+<span class="c"># then, every time</span>
+fvm flutter run -d macos</pre>
+    <p class="muted">Requires a master‑channel Flutter (the demo pins one via fvm).</p>
+  </section>
+
+  <!-- 4 -->
+  <section data-title="Headless engine">
+    <div class="kicker">Step 3 · The macOS runner</div>
+    <h2>Run a headless engine</h2>
+    <p>The default macOS template attaches a <code>FlutterViewController</code> at launch. The first time Dart creates a window the engine calls <code>enableMultiView</code>, which <strong>aborts</strong> if a view controller already exists:</p>
+    <pre class="c">*** reason: 'Multiview can only be enabled before
+            adding any view controllers.'</pre>
+    <p>Fix: the runner runs a <strong>headless <code>FlutterEngine</code></strong> in <code>applicationDidFinishLaunching</code> and lets Dart create every window. The storyboard's auto‑instantiated <code>MainFlutterWindow</code> is removed.</p>
+    <pre><span class="k">override func</span> applicationDidFinishLaunching(_ n: <span class="t">Notification</span>) {
+  engine = <span class="t">FlutterEngine</span>(name: <span class="s">"panes"</span>, project: <span class="k">nil</span>)
+  engine?.run(withEntrypoint: <span class="k">nil</span>)   <span class="c">// no view controller yet</span>
+}</pre>
+  </section>
+
+  <!-- 5 -->
+  <section data-title="Composition">
+    <div class="kicker">Step 4 · How windows compose</div>
+    <h2>One tree, many views</h2>
+    <p><code>runWidget</code> renders the main window; the surrounding app widget auto‑inserts a <code>WindowManager</code> that renders every registered window as a <strong>sibling view</strong> via <code>ViewAnchor</code> — all in one isolate, so every window shares one <code>PanelManager</code>.</p>
+    <pre><span class="k">runWidget</span>(<span class="t">PanelScope</span>(            <span class="c">// shared state, above your app widget</span>
+  manager: manager,
+  child: <span class="t">RegularWindow</span>(            <span class="c">// the main OS window</span>
+    controller: <span class="t">RegularWindowController</span>(preferredSize: <span class="t">Size</span>(1180, 760)),
+    child: <span class="t">AppShell</span>(home: <span class="t">PanelDock</span>()),  <span class="c">// any WidgetsApp</span>
+  ),
+));</pre>
+    <ul>
+      <li><strong>Not dependent on Material</strong> — drop <code>PanelDock</code> into any app shell; its look comes from <code>PanelTheme</code>, not Material.</li>
+      <li><strong>PanelScope</strong> sits above your app widget so detached sibling‑view windows can still read the shared manager.</li>
+    </ul>
+  </section>
+
+  <!-- 6 -->
+  <section data-title="Architecture">
+    <div class="kicker">Step 5 · The framework</div>
+    <h2>Eight small files</h2>
+    <div class="grid">
+      <div class="card"><h3>panel.dart</h3><p>PanelDescriptor (id, title, icon, builder) + DockSide.</p></div>
+      <div class="card"><h3>panel_config.dart</h3><p>PanelDockConfig, PanelTheme, PanelStorage, strings.</p></div>
+      <div class="card"><h3>panel_manager.dart</h3><p>Placement state, splits, detach/redock, focus, persistence.</p></div>
+      <div class="card"><h3>panel_dock.dart</h3><p>The workspace UI: regions, tabs, splitters, drop zones.</p></div>
+      <div class="card"><h3>floating_panel.dart</h3><p>Detached‑window content + snap‑back header.</p></div>
+      <div class="card"><h3>native_dock.dart</h3><p>The <code>dart:ffi</code> bridge to AppKit (ffigen bindings + <code>NativeCallable</code>).</p></div>
+      <div class="card"><h3>panel_shortcuts.dart</h3><p>Split/Merge Intents, Actions, default key map.</p></div>
+      <div class="card"><h3>panels.dart</h3><p>The public barrel / library entrypoint.</p></div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section data-title="Regions = groups">
+    <div class="kicker">Step 6 · Layout model</div>
+    <h2>Regions hold side‑by‑side groups</h2>
+    <p>Each dock side is an ordered list of weighted <strong>groups</strong> (each a tab strip) laid out along the region's axis — so panels sit next to each other, not just as tabs.</p>
+    <div class="mock" aria-hidden="true">
+      <div class="titlebar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span></div>
+      <div class="row">
+        <div class="col left"><div class="tabs"><span class="tab on">Explorer</span></div><div class="body">files</div></div>
+        <div class="col" style="flex:1"><div class="tabs"><span class="tab on">main.dart</span><span class="tab">styles.css</span></div><div class="body">editor</div></div>
+        <div class="col right"><div class="tabs"><span class="tab on">Inspector</span></div><div class="body">props</div></div>
+      </div>
+      <div class="col bottom"><div class="row"><div class="col" style="flex:1"><div class="tabs"><span class="tab on">Terminal</span></div><div class="body">$</div></div><div class="col" style="flex:1;border-left:1px solid var(--border)"><div class="tabs"><span class="tab on">Problems</span></div><div class="body">0</div></div></div></div>
+    </div>
+    <p class="muted">left/right stack vertically · bottom/center lay out horizontally · splitters re‑proportion via weights.</p>
+  </section>
+
+  <!-- 8 -->
+  <section data-title="Drag">
+    <div class="kicker">Step 7 · Drag interactions</div>
+    <h2>Drag a tab — it knows where it'll land</h2>
+    <ul>
+      <li>Drag <strong>within the tab strip</strong> → reorder (an accent insertion line marks the slot).</li>
+      <li>Drop on a group's <strong>center</strong> → add as a tab.</li>
+      <li>Drop on a group's <strong>edge</strong> → split into a new group beside it (with a live preview).</li>
+      <li>Drop on an <strong>empty region edge</strong> → create the first group there.</li>
+      <li>Drop <strong>outside the window</strong> → tear off into a floating OS window.</li>
+      <li>Or skip the mouse: focus a group and press <strong>⌘\</strong> to split / <strong>⌘⇧\</strong> to merge.</li>
+    </ul>
+    <div class="mock" aria-hidden="true">
+      <div class="titlebar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span></div>
+      <div class="row">
+        <div class="col" style="flex:1"><div class="tabs"><span class="tab on">main.dart</span></div><div class="body">editor</div></div>
+        <div class="col ghost" style="flex:.6"><div class="tabs"></div><div class="body" style="color:var(--accent)">New group</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section data-title="Native dock">
+    <div class="kicker">Step 8 · The native layer</div>
+    <h2>AppKit does what Flutter can't</h2>
+    <p>A <code>dart:ffi</code> bridge connects Dart and Swift — forward calls via <strong>ffigen</strong> bindings into Swift <code>@_cdecl</code> functions, reverse drag/drop events via <code>NativeCallable</code> pointers — for things Flutter can't do on macOS:</p>
+    <ul>
+      <li><strong>Hide the title bar:</strong> a detached window is matched by a hidden title token, then styled — <code>fullSizeContentView</code>, transparent titlebar, hidden traffic lights, <code>isMovableByWindowBackground</code>.</li>
+      <li><strong>Open where you are:</strong> it's positioned at the mouse and moved to the active Space, so it doesn't pop back to the original desktop.</li>
+      <li><strong>Drag‑back snapping:</strong> a 60 fps timer streams the live pointer + window frames and detects release via <code>NSEvent.pressedMouseButtons</code> (a <code>leftMouseUp</code> monitor is swallowed by the window‑drag loop).</li>
+    </ul>
+    <p>Dart maps the pointer onto the dock and shows a <strong>single</strong> target preview only while it's over the main window — then <code>redock()</code> snaps it in.</p>
+  </section>
+
+  <!-- 10 -->
+  <section data-title="Theming">
+    <div class="kicker">Step 9 · Make it yours</div>
+    <h2>No Material tint — pure PanelTheme</h2>
+    <p>The dock paints from a Material‑independent <code>PanelTheme</code> (neutral light/dark by default), so there's no surface tint. Tabs can be rendered however you like.</p>
+    <pre><span class="t">PanelManager</span>(config: <span class="t">PanelDockConfig</span>(
+  lightTheme: <span class="t">PanelTheme</span>.light(),
+  darkTheme:  <span class="t">PanelTheme</span>.dark(),
+  tabBuilder: (context, spec) =&gt; <span class="t">MyTab</span>(    <span class="c">// arbitrary tabs</span>
+    title: spec.descriptor.title,
+    selected: spec.selected, theme: spec.theme,
+  ),
+));</pre>
+  </section>
+
+  <!-- 11 -->
+  <section data-title="Persistence">
+    <div class="kicker">Step 10 · Remember the layout</div>
+    <h2>Pluggable persistence</h2>
+    <p>Implement <code>PanelStorage</code> and the manager auto‑saves (debounced) on every change; <code>restore()</code> reloads it on startup.</p>
+    <pre><span class="k">class</span> <span class="t">MyStorage</span> <span class="k">implements</span> <span class="t">PanelStorage</span> {
+  <span class="t">FutureOr</span>&lt;<span class="t">Map</span>&lt;<span class="t">String</span>, <span class="t">Object?</span>&gt;?&gt; read() =&gt; <span class="c">/* load */</span>;
+  <span class="t">FutureOr</span>&lt;<span class="k">void</span>&gt; write(<span class="t">Map</span>&lt;<span class="t">String</span>, <span class="t">Object?</span>&gt; m) =&gt; <span class="c">/* save */</span>;
+}
+
+<span class="k">final</span> manager = <span class="t">PanelManager</span>(config: <span class="t">PanelDockConfig</span>(storage: <span class="t">MyStorage</span>()))
+  ..registerPanel(<span class="c">/* … */</span>);
+<span class="k">await</span> manager.restore();   <span class="c">// applies the saved layout</span></pre>
+  </section>
+
+  <!-- 12 -->
+  <section data-title="Keyboard">
+    <div class="kicker">Step 11 · Keyboard‑driven</div>
+    <h2>Split &amp; merge with the keyboard</h2>
+    <p>Splitting/merging is exposed as Actions &amp; Intents acting on the <strong>focused</strong> group (a group focuses on click and shows an accent border).</p>
+    <p><span class="kbd">⌘ \</span> &nbsp;split the focused panel &nbsp;&nbsp; <span class="kbd">⌘ ⇧ \</span> &nbsp;merge it back</p>
+    <pre><span class="t">Shortcuts</span>(
+  shortcuts: defaultPanelShortcuts(),
+  child: <span class="t">Actions</span>(
+    actions: panelActions(manager),
+    child: <span class="k">const</span> <span class="t">Focus</span>(autofocus: <span class="k">true</span>, child: <span class="t">PanelDock</span>()),
+  ),
+);</pre>
+  </section>
+
+  <!-- 13 -->
+  <section data-title="Recap">
+    <div class="kicker">That's the whole thing</div>
+    <h2>Flutter windows + a little Swift</h2>
+    <p class="lede">Experimental multi‑window Flutter gives real OS windows in one shared isolate; a thin AppKit layer supplies the borderless chrome and pointer‑tracked docking Flutter can't reach yet. Everything else — splits, theming, persistence, shortcuts — is plain Dart.</p>
+    <p class="muted">See <code>MANUAL.md</code> for the full build/reproduction guide and <code>README.md</code> for the library API.</p>
+  </section>
+
+</main>
+
+<script>
+  const deck = document.getElementById('deck');
+  const sections = [...document.querySelectorAll('section')];
+  const dots = document.getElementById('dots');
+  const progress = document.getElementById('progress');
+
+  sections.forEach((s, i) => {
+    const a = document.createElement('a');
+    a.href = '#';
+    a.innerHTML = '<span>' + (s.dataset.title || ('Slide ' + (i+1))) + '</span>';
+    a.addEventListener('click', e => { e.preventDefault(); s.scrollIntoView({behavior:'smooth'}); });
+    dots.appendChild(a);
+  });
+  const dotEls = [...dots.children];
+
+  function onScroll(){
+    const top = deck.scrollTop, h = deck.scrollHeight - deck.clientHeight;
+    progress.style.width = (h > 0 ? (top / h) * 100 : 0) + '%';
+    let active = 0, mid = top + deck.clientHeight/2;
+    sections.forEach((s,i)=>{ if(s.offsetTop <= mid) active = i; });
+    dotEls.forEach((d,i)=>d.classList.toggle('active', i===active));
+  }
+  deck.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+
+  // arrow / space navigation
+  function current(){ const mid = deck.scrollTop + deck.clientHeight/2; let a=0; sections.forEach((s,i)=>{if(s.offsetTop<=mid)a=i;}); return a; }
+  window.addEventListener('keydown', e=>{
+    if(['ArrowDown','PageDown',' '].includes(e.key)){ e.preventDefault(); sections[Math.min(current()+1,sections.length-1)].scrollIntoView({behavior:'smooth'}); }
+    else if(['ArrowUp','PageUp'].includes(e.key)){ e.preventDefault(); sections[Math.max(current()-1,0)].scrollIntoView({behavior:'smooth'}); }
+    else if(e.key==='Home'){ e.preventDefault(); sections[0].scrollIntoView({behavior:'smooth'}); }
+    else if(e.key==='End'){ e.preventDefault(); sections[sections.length-1].scrollIntoView({behavior:'smooth'}); }
+  });
+</script>
+</body>
+</html>
