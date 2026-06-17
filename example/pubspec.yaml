@@ -14,6 +14,13 @@ dependencies:
     path: ../packages/panel
   panel_macos:
     path: ../packages/panel_macos
+  # Pure-Dart PDF viewer (no native printing plugins), so it renders inside
+  # Flutter's experimental multi-window engine. https://github.com/ben-milanko/dart-pdf
+  dart_pdf_editor:
+    git:
+      url: https://github.com/ben-milanko/dart-pdf
+      path: packages/dart_pdf_editor
+      ref: app-v1.2.0
 
 dev_dependencies:
   flutter_test:
@@ -22,3 +29,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/sample.pdf

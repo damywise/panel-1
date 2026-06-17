@@ -14,8 +14,11 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:dart_pdf_editor/dart_pdf_editor.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/src/widgets/_window.dart';
 
 import 'package:panel/panel.dart';
@@ -61,6 +64,7 @@ Future<void> main() async {
     ..registerPanel(_explorerPanel, side: DockSide.left)
     ..registerPanel(_outlinePanel, side: DockSide.left, activate: false)
     ..registerPanel(_editorPanel, side: DockSide.center)
+    ..registerPanel(_pdfPanel, side: DockSide.center, activate: false)
     ..registerPanel(_stylesPanel, side: DockSide.center, activate: false)
     ..registerPanel(_readmePanel, side: DockSide.center, activate: false)
     ..registerPanel(_inspectorPanel, side: DockSide.right)
@@ -267,6 +271,13 @@ A dockable / detachable panel framework.
 '''),
     );
 
+PanelDescriptor get _pdfPanel => PanelDescriptor(
+      id: 'pdf',
+      title: 'sample.pdf',
+      icon: Icons.picture_as_pdf_outlined,
+      builder: (_) => const _PdfPreview(),
+    );
+
 PanelDescriptor get _inspectorPanel => PanelDescriptor(
       id: 'inspector',
       title: 'Inspector',
@@ -414,6 +425,44 @@ class _CodeView extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Renders the bundled `assets/sample.pdf` with [PdfReader] — a pure-Dart
+/// viewer (search, page navigation, thumbnail sidebar) from
+/// `package:dart_pdf_editor`. No native printing plugin is involved, so it
+/// renders happily inside a detached floating window too: pop this tab out
+/// and the viewer keeps working in its own OS window.
+class _PdfPreview extends StatefulWidget {
+  const _PdfPreview();
+
+  @override
+  State<_PdfPreview> createState() => _PdfPreviewState();
+}
+
+class _PdfPreviewState extends State<_PdfPreview> {
+  // Loaded once; the same bytes are reused if this panel is detached/redocked.
+  late final Future<Uint8List> _bytes = rootBundle
+      .load('assets/sample.pdf')
+      .then((ByteData data) => data.buffer.asUint8List());
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List>(
+      future: _bytes,
+      builder: (BuildContext context, AsyncSnapshot<Uint8List> snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text('Failed to load PDF: ${snapshot.error}'));
+        }
+        final Uint8List? bytes = snapshot.data;
+        if (bytes == null) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        // documentId pins the scroll/zoom memory to this document so it
+        // survives detaching the panel into a window and docking it back.
+        return PdfReader(bytes: bytes, documentId: 'assets/sample.pdf');
+      },
     );
   }
 }
