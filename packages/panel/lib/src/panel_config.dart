@@ -38,6 +38,8 @@ class PanelTheme {
     this.tabUnderlineThickness = 2.0,
     this.showPanelBorder = true,
     this.tabDividerThickness = 1.0,
+    this.panelRadius = 0.0,
+    this.panelPadding = EdgeInsets.zero,
   });
 
   /// Workspace background (gaps, empty center).
@@ -95,6 +97,14 @@ class PanelTheme {
   /// Thickness of the divider between a tab strip and its content (drawn in
   /// [border]). Set to 0 to drop the divider, or raise it for a heavier rule.
   final double tabDividerThickness;
+
+  /// Corner radius applied to docked panel groups (and the collapsed-dock
+  /// strip). 0 keeps square corners.
+  final double panelRadius;
+
+  /// Inset around each dock region's groups, giving rounded panels room to
+  /// breathe. `EdgeInsets.zero` docks flush.
+  final EdgeInsets panelPadding;
 
   /// A neutral light palette (no Material surface tint).
   factory PanelTheme.light() => const PanelTheme(

@@ -381,6 +381,7 @@ class PanelManager extends ChangeNotifier {
   void detach(String id) {
     if (!_windowing.supportsDetach) return;
     if (_floatingOrigin.containsKey(id)) return;
+    if (!(_descriptors[id]?.detachable ?? true)) return;
     final DockSide origin = _locOf(id)?.side ?? DockSide.right;
     _removeFromDock(id);
     _floatingOrigin[id] = origin;
@@ -497,6 +498,13 @@ class PanelManager extends ChangeNotifier {
     _saveTimer = Timer(const Duration(milliseconds: 300), () {
       config.storage?.write(saveLayout());
     });
+  }
+
+  /// Synchronously persists the current layout if a [config.storage] is set.
+  void saveNow() {
+    if (config.storage != null) {
+      config.storage?.write(saveLayout());
+    }
   }
 
   /// Serializes the current docked layout to a JSON-encodable map. Floating
@@ -616,6 +624,9 @@ class PanelManager extends ChangeNotifier {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    if (config.storage != null) {
+      config.storage?.write(saveLayout());
+    }
     for (final String id in _floatingOrigin.keys.toList()) {
       _windowing.close(id);
     }

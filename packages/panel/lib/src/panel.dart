@@ -41,6 +41,7 @@ class PanelDescriptor {
     required this.builder,
     this.icon,
     this.detachedSize,
+    this.detachable = true,
   });
 
   /// Stable, unique identifier used by the manager to track placement.
@@ -58,4 +59,8 @@ class PanelDescriptor {
   /// Preferred size of this panel's detached floating window. When null,
   /// `PanelDockConfig.defaultDetachedSize` is used.
   final Size? detachedSize;
+
+  /// Whether this panel may be detached into its own floating window. When
+  /// false, the detach button and tab drag-tear-off are suppressed.
+  final bool detachable;
 }

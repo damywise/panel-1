@@ -15,7 +15,7 @@
 // Platform-generic: no windowing/native imports. Detaching is delegated to the
 // manager's backend via `manager.detach(id)`.
 
-import 'package:flutter/material.dart' show Icons, Tooltip, IconButton, VisualDensity;
+import 'package:flutter/material.dart' show Colors, Icons, Tooltip, IconButton, VisualDensity;
 import 'package:flutter/widgets.dart';
 
 import 'panel.dart';
@@ -62,51 +62,54 @@ class _DockArea extends StatelessWidget {
     final PanelTheme t = cfg.themeOf(context);
     return ColoredBox(
       color: t.background,
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints c) {
-          double leftW = manager.sizeOf(DockSide.left);
-          double rightW = manager.sizeOf(DockSide.right);
-          final bool hasLeft = manager.hasPanels(DockSide.left) && !manager.isCollapsed(DockSide.left);
-          final bool hasRight = manager.hasPanels(DockSide.right) && !manager.isCollapsed(DockSide.right);
-          final double sidesAvail = (c.maxWidth - cfg.minCenterWidth).clamp(0.0, c.maxWidth);
-          final double usedLeft = hasLeft ? leftW : 0;
-          final double usedRight = hasRight ? rightW : 0;
-          if (usedLeft + usedRight > sidesAvail && usedLeft + usedRight > 0) {
-            final double scale = sidesAvail / (usedLeft + usedRight);
-            leftW *= scale;
-            rightW *= scale;
-          }
-          final double bottomMax = (c.maxHeight - cfg.minCenterHeight).clamp(cfg.minDockExtent, c.maxHeight);
-          final double bottomH = manager.sizeOf(DockSide.bottom).clamp(cfg.minDockExtent, bottomMax);
-
-          final List<Widget> row = <Widget>[];
-          if (manager.hasPanels(DockSide.left)) {
-            row.add(_sideDock(DockSide.left, leftW));
-            if (!manager.isCollapsed(DockSide.left)) {
-              row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.left, manager.sizeOf(DockSide.left) + d)));
+      child: Padding(
+        padding: t.panelPadding,
+        child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints c) {
+            double leftW = manager.sizeOf(DockSide.left);
+            double rightW = manager.sizeOf(DockSide.right);
+            final bool hasLeft = manager.hasPanels(DockSide.left) && !manager.isCollapsed(DockSide.left);
+            final bool hasRight = manager.hasPanels(DockSide.right) && !manager.isCollapsed(DockSide.right);
+            final double sidesAvail = (c.maxWidth - cfg.minCenterWidth).clamp(0.0, c.maxWidth);
+            final double usedLeft = hasLeft ? leftW : 0;
+            final double usedRight = hasRight ? rightW : 0;
+            if (usedLeft + usedRight > sidesAvail && usedLeft + usedRight > 0) {
+              final double scale = sidesAvail / (usedLeft + usedRight);
+              leftW *= scale;
+              rightW *= scale;
             }
-          }
-          row.add(Expanded(child: _CenterArea(manager: manager, onDetach: onDetach)));
-          if (manager.hasPanels(DockSide.right)) {
-            if (!manager.isCollapsed(DockSide.right)) {
-              row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.right, manager.sizeOf(DockSide.right) - d)));
-            }
-            row.add(_sideDock(DockSide.right, rightW));
-          }
+            final double bottomMax = (c.maxHeight - cfg.minCenterHeight).clamp(cfg.minDockExtent, c.maxHeight);
+            final double bottomH = manager.sizeOf(DockSide.bottom).clamp(cfg.minDockExtent, bottomMax);
 
-          Widget content = Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: row);
-          if (manager.hasPanels(DockSide.bottom)) {
-            content = Column(
-              children: <Widget>[
-                Expanded(child: content),
-                if (!manager.isCollapsed(DockSide.bottom))
-                  _splitter(t, Axis.horizontal, (double d) => manager.setSize(DockSide.bottom, manager.sizeOf(DockSide.bottom) - d)),
-                _bottomDock(bottomH),
-              ],
-            );
-          }
-          return content;
-        },
+            final List<Widget> row = <Widget>[];
+            if (manager.hasPanels(DockSide.left)) {
+              row.add(_sideDock(DockSide.left, leftW));
+              if (!manager.isCollapsed(DockSide.left)) {
+                row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.left, manager.sizeOf(DockSide.left) + d)));
+              }
+            }
+            row.add(Expanded(child: _CenterArea(manager: manager, onDetach: onDetach)));
+            if (manager.hasPanels(DockSide.right)) {
+              if (!manager.isCollapsed(DockSide.right)) {
+                row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.right, manager.sizeOf(DockSide.right) - d)));
+              }
+              row.add(_sideDock(DockSide.right, rightW));
+            }
+
+            Widget content = Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: row);
+            if (manager.hasPanels(DockSide.bottom)) {
+              content = Column(
+                children: <Widget>[
+                  Expanded(child: content),
+                  if (!manager.isCollapsed(DockSide.bottom))
+                    _splitter(t, Axis.horizontal, (double d) => manager.setSize(DockSide.bottom, manager.sizeOf(DockSide.bottom) - d)),
+                  _bottomDock(bottomH),
+                ],
+              );
+            }
+            return content;
+            },
+          ),
       ),
     );
   }
@@ -246,14 +249,13 @@ class PanelGroup extends StatelessWidget {
     }
     active ??= panels.isEmpty ? null : panels.first;
 
-    final bool focused = manager.isFocusedGroup(side, groupIndex);
     final Widget group = DecoratedBox(
       decoration: BoxDecoration(
         color: t.surface,
-        // Focus ring always shows; the resting hairline is themeable away.
-        border: focused
-            ? Border.all(color: t.accent, width: 1.5)
-            : (t.showPanelBorder ? Border.all(color: t.border, width: 1) : null),
+        borderRadius: BorderRadius.circular(t.panelRadius),
+        // The resting hairline is themeable away; clicking a panel no longer
+        // paints a focus ring (focus is tracked internally for split/merge keys).
+        border: t.showPanelBorder ? Border.all(color: t.border, width: 1) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -297,7 +299,10 @@ class PanelGroup extends StatelessWidget {
     // Clicking anywhere in the group focuses it (target for split/merge keys).
     return Listener(
       onPointerDown: (_) => manager.setFocusedGroup(side, groupIndex),
-      child: body,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(t.panelRadius),
+        child: body,
+      ),
     );
   }
 }
@@ -348,7 +353,7 @@ class _TabStrip extends StatelessWidget {
               icon: side == DockSide.bottom || side == DockSide.center ? Icons.splitscreen : Icons.horizontal_split,
               onPressed: () => manager.splitActiveGroup(side, groupIndex),
             ),
-          if (cfg.allowDetach && manager.supportsDetach && activeId != null)
+          if (cfg.allowDetach && manager.supportsDetach && activeId != null && manager.descriptor(activeId!).detachable)
             _StripButton(tooltip: str.detachTooltip, color: t.mutedText, icon: Icons.open_in_new, onPressed: () => onDetach(activeId!)),
           if (showCollapse)
             _StripButton(tooltip: str.minimizeDock(side), color: t.mutedText, icon: Icons.remove, onPressed: () => manager.toggleCollapsed(side)),
@@ -490,7 +495,9 @@ class _TabState extends State<_Tab> {
       onDragStarted: () => widget.manager.beginDrag(side: widget.side, group: widget.groupIndex, panelId: widget.descriptor.id),
       onDragEnd: (_) => widget.manager.endDrag(),
       onDraggableCanceled: (_, _) {
-        if (widget.manager.config.allowDetach && widget.manager.supportsDetach) {
+        if (widget.manager.config.allowDetach &&
+            widget.manager.supportsDetach &&
+            widget.manager.descriptor(widget.descriptor.id).detachable) {
           widget.onDetach(widget.descriptor.id);
         }
         widget.manager.endDrag();
@@ -733,26 +740,29 @@ class _CollapsedDock extends StatelessWidget {
       onTap: () => manager.toggleCollapsed(side),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
-        child: Container(
-          width: axis == Axis.vertical ? extent : null,
-          height: axis == Axis.horizontal ? extent : null,
-          color: t.tabBar,
-          padding: const EdgeInsets.all(6),
-          child: axis == Axis.vertical
-              ? Column(
-                  children: <Widget>[
-                    Icon(side == DockSide.left ? Icons.chevron_right : Icons.chevron_left, size: 16, color: t.mutedText),
-                    const SizedBox(height: 8),
-                    Expanded(child: RotatedBox(quarterTurns: 1, child: Center(child: labelText))),
-                  ],
-                )
-              : Row(
-                  children: <Widget>[
-                    Icon(Icons.keyboard_arrow_up, size: 16, color: t.mutedText),
-                    const SizedBox(width: 8),
-                    Expanded(child: labelText),
-                  ],
-                ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(t.panelRadius),
+          child: Container(
+            width: axis == Axis.vertical ? extent : null,
+            height: axis == Axis.horizontal ? extent : null,
+            color: t.tabBar,
+            padding: const EdgeInsets.all(6),
+            child: axis == Axis.vertical
+                ? Column(
+                    children: <Widget>[
+                      Icon(side == DockSide.left ? Icons.chevron_right : Icons.chevron_left, size: 16, color: t.mutedText),
+                      const SizedBox(height: 8),
+                      Expanded(child: RotatedBox(quarterTurns: 1, child: Center(child: labelText))),
+                    ],
+                  )
+                : Row(
+                    children: <Widget>[
+                      Icon(Icons.keyboard_arrow_up, size: 16, color: t.mutedText),
+                      const SizedBox(width: 8),
+                      Expanded(child: labelText),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -793,7 +803,7 @@ class _SplitterState extends State<_Splitter> {
       return SizedBox(width: vertical ? 1 : null, height: vertical ? null : 1, child: ColoredBox(color: t.splitter));
     }
 
-    final Color lineColor = _active ? t.splitterActive : t.splitter;
+    final Color lineColor = _active ? t.splitterActive : Colors.transparent;
     final double thickness = _active ? 2 : 1;
 
     return MouseRegion(
