@@ -488,11 +488,12 @@ class PanelManager extends ChangeNotifier {
   // ---- Persistence ---------------------------------------------------------
 
   Timer? _saveTimer;
+  bool _restoring = false;
 
   @override
   void notifyListeners() {
     super.notifyListeners();
-    if (config.storage == null) return;
+    if (config.storage == null || _restoring) return;
     // Debounce: coalesce rapid changes (drags, resizes) into one write.
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 300), () {
@@ -587,8 +588,15 @@ class PanelManager extends ChangeNotifier {
   Future<void> restore() async {
     final PanelStorage? s = config.storage;
     if (s == null) return;
-    final Map<String, Object?>? data = await s.read();
-    if (data != null) loadLayout(data);
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    _restoring = true;
+    try {
+      final Map<String, Object?>? data = await s.read();
+      if (data != null) loadLayout(data);
+    } finally {
+      _restoring = false;
+    }
   }
 
   // ---- Internals -----------------------------------------------------------
