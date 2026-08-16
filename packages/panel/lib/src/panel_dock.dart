@@ -22,6 +22,7 @@ import 'package:flutter/gestures.dart' show kPrimaryButton, kSecondaryMouseButto
 import 'package:flutter/material.dart' show Colors, Icons, Tooltip, IconButton, VisualDensity;
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/widgets.dart';
+import 'package:hit/hit.dart';
 
 import 'panel.dart';
 import 'panel_config.dart';
@@ -129,7 +130,10 @@ class _DockArea extends StatelessWidget {
                 ],
               );
             }
-            return content;
+            // One scope over the whole workspace delivers overflow hits for
+            // splitter handles that are wider than their visible gap (see
+            // [_SplitterState.build] / `splitterGap`).
+            return HitScope(child: content);
             },
           ),
       ),
@@ -141,6 +145,7 @@ class _DockArea extends StatelessWidget {
         theme: t,
         enabled: manager.config.allowResize,
         hitSize: manager.config.splitterHitSize,
+        visualGap: manager.config.splitterGap,
         duration: manager.config.splitterDuration,
         onDrag: onDrag,
       );
@@ -222,6 +227,7 @@ class _RegionView extends StatelessWidget {
               theme: t,
               enabled: manager.config.allowResize,
               hitSize: manager.config.splitterHitSize,
+              visualGap: manager.config.splitterGap,
               duration: manager.config.splitterDuration,
               onDrag: (double d) => manager.adjustGroupWeights(side, leftIndex, d, total),
             ));
@@ -537,9 +543,10 @@ class _TabState extends State<_Tab> {
   /// the gaps immediately around the dragged tab are no-ops, so they're hidden
   /// (e.g. dragging `main.dart` shows no indicator right next to itself).
   ///
-  /// The dragged tab's own slot gets a full-area "drop to return" target with
-  /// a visible accent affordance: dropping there cancels the drag and returns
-  /// the panel to its original dock.
+  /// The dragged tab's own slot is a silent drop-to-return target: dropping
+  /// there cancels the drag and returns the panel to its original dock. It
+  /// renders no affordance — the tab looks normal, with no overlay on the
+  /// label.
   Widget _wrapReorder(PanelTheme t, Widget content) {
     final PanelManager m = widget.manager;
     if (!m.isDragging) return content;
@@ -551,45 +558,13 @@ class _TabState extends State<_Tab> {
     final int draggedIdx = isSource ? panels.indexWhere((PanelDescriptor p) => p.id == m.draggedPanelId) : -1;
 
     // The dragged tab's own slot: dropping here cancels (returns the panel to
-    // its original position) instead of tearing it off.
+    // its original position) instead of tearing it off. No visible affordance
+    // — the tab renders normally.
     if (isSource && idx == draggedIdx) {
       return DragTarget<_TabDrag>(
         onWillAcceptWithDetails: (_) => true,
         onAcceptWithDetails: (_) => widget.manager.endDrag(),
-        builder: (BuildContext context, List<_TabDrag?> cand, _) {
-          final bool active = cand.isNotEmpty;
-          return Container(
-            decoration: BoxDecoration(
-              color: active
-                  ? t.accent.withValues(alpha: 0.22)
-                  : t.accent.withValues(alpha: 0.06),
-              border: Border.all(
-                color: active ? t.accent : t.accent.withValues(alpha: 0.55),
-                width: active ? 2 : 1,
-              ),
-              borderRadius: t.tabRadius,
-            ),
-            child: Stack(
-              fit: StackFit.passthrough,
-              children: <Widget>[
-                content,
-                if (active)
-                  Positioned.fill(
-                    child: Center(
-                      child: Text(
-                        m.config.strings.dropToReturn,
-                        style: TextStyle(
-                          color: t.accent,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
+        builder: (BuildContext context, List<_TabDrag?> cand, _) => content,
       );
     }
 
@@ -985,6 +960,7 @@ class _Splitter extends StatefulWidget {
     required this.onDrag,
     this.enabled = true,
     this.hitSize = 8,
+    this.visualGap,
     this.duration = const Duration(milliseconds: 100),
   });
 
@@ -993,6 +969,10 @@ class _Splitter extends StatefulWidget {
   final ValueChanged<double> onDrag;
   final bool enabled;
   final double hitSize;
+
+  /// Visual gap width; null keeps the classic transparent band.
+  final double? visualGap;
+
   final Duration duration;
 
   @override
@@ -1011,10 +991,22 @@ class _SplitterState extends State<_Splitter> {
       return SizedBox(width: vertical ? 1 : null, height: vertical ? null : 1, child: ColoredBox(color: t.splitter));
     }
 
+    final double? gap = widget.visualGap;
     final Color lineColor = _active ? t.splitterActive : Colors.transparent;
     final double thickness = _active ? 2 : 1;
 
-    return MouseRegion(
+    // Classic line: a centered 1–2px handle that only appears while active.
+    final Widget line = AnimatedContainer(
+      duration: widget.duration,
+      width: vertical ? thickness : double.infinity,
+      height: vertical ? double.infinity : thickness,
+      color: lineColor,
+    );
+
+    // Shared interaction surface: [hitSize] wide with the hover cursor and
+    // drag gestures. When [gap] is set this is larger than the visible gap
+    // (hit/paint separation); otherwise it is the whole splitter band.
+    final Widget interaction = MouseRegion(
       cursor: vertical ? SystemMouseCursors.resizeColumn : SystemMouseCursors.resizeRow,
       onEnter: (_) => setState(() => _active = true),
       onExit: (_) => setState(() => _active = false),
@@ -1026,19 +1018,35 @@ class _SplitterState extends State<_Splitter> {
         onVerticalDragStart: vertical ? null : (_) => setState(() => _active = true),
         onVerticalDragEnd: vertical ? null : (_) => setState(() => _active = false),
         onVerticalDragUpdate: vertical ? null : (DragUpdateDetails d) => widget.onDrag(d.delta.dy),
-        child: SizedBox(
-          width: vertical ? widget.hitSize : null,
-          height: vertical ? null : widget.hitSize,
-          child: Center(
-            child: AnimatedContainer(
-              duration: widget.duration,
-              width: vertical ? thickness : double.infinity,
-              height: vertical ? double.infinity : thickness,
-              color: lineColor,
-            ),
-          ),
-        ),
+        child: Center(child: line),
       ),
+    );
+
+    if (gap != null) {
+      // Hit/paint separation (via package:hit): the visible gap (layout) is
+      // [gap] px and stays plain background, while the resize handle is the
+      // larger [hitSize] px centered on it — e.g. a 2px gap with a 5px grab
+      // area. No resting divider is drawn; the accent line only appears while
+      // hovering/dragging. Requires a [HitScope] ancestor covering the
+      // overflow, which the dock area provides.
+      return HitLayer(
+        alignment: Alignment.center,
+        hitChild: SizedBox(
+          width: vertical ? widget.hitSize : double.infinity,
+          height: vertical ? double.infinity : widget.hitSize,
+          child: interaction,
+        ),
+        paintChild: SizedBox(
+          width: vertical ? gap : null,
+          height: vertical ? null : gap,
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: vertical ? widget.hitSize : null,
+      height: vertical ? null : widget.hitSize,
+      child: interaction,
     );
   }
 }

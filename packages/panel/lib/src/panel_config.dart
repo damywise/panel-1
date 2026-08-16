@@ -245,6 +245,7 @@ class PanelDockConfig {
     this.collapsedExtent = 36,
     this.tabStripHeight = 38,
     this.splitterHitSize = 8,
+    this.splitterGap,
     this.dropEdgeFraction = 0.30,
     this.defaultDetachedSize = const Size(480, 600),
     this.detachedConstraints = const BoxConstraints(minWidth: 240, minHeight: 200),
@@ -287,6 +288,20 @@ class PanelDockConfig {
 
   /// Hit thickness of the (1–2px) splitter handles.
   final double splitterHitSize;
+
+  /// Visual width of the gap between docks, when the splitter should be
+  /// tighter than its hit region. `null` (default) keeps the classic look:
+  /// the whole [splitterHitSize]-wide band shows as gap, and a centered line
+  /// only appears while dragging.
+  ///
+  /// When non-null, the splitter separates layout from hit size (via
+  /// package:hit): the visible gap (layout) is [splitterGap] px and stays
+  /// plain background — no divider is painted — while the resize handle is
+  /// the larger [splitterHitSize] px centered on it (e.g. a 2px gap with a
+  /// 5px grab area). The accent line only appears while hovering/dragging.
+  /// Requires a [HitScope] ancestor covering the overflow, which the dock
+  /// area provides. Keep [splitterHitSize] at least [splitterGap].
+  final double? splitterGap;
 
   /// Fraction of a group's edge that triggers a "new group" split on drop
   /// (the remaining center triggers "add as tab"). Range (0, 0.5).
@@ -358,6 +373,7 @@ class PanelDockConfig {
     double? collapsedExtent,
     double? tabStripHeight,
     double? splitterHitSize,
+    double? splitterGap,
     double? dropEdgeFraction,
     Size? defaultDetachedSize,
     BoxConstraints? detachedConstraints,
@@ -386,6 +402,7 @@ class PanelDockConfig {
       collapsedExtent: collapsedExtent ?? this.collapsedExtent,
       tabStripHeight: tabStripHeight ?? this.tabStripHeight,
       splitterHitSize: splitterHitSize ?? this.splitterHitSize,
+      splitterGap: splitterGap ?? this.splitterGap,
       dropEdgeFraction: dropEdgeFraction ?? this.dropEdgeFraction,
       defaultDetachedSize: defaultDetachedSize ?? this.defaultDetachedSize,
       detachedConstraints: detachedConstraints ?? this.detachedConstraints,

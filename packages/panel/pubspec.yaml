@@ -22,6 +22,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Hit/paint size separation for the splitter handles: lets the resize grab
+  # area be larger than the visual gap without painting anything.
+  hit: ^1.2.4
 
 dev_dependencies:
   flutter_test:
