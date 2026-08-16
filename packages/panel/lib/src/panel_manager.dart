@@ -16,7 +16,10 @@
 
 import 'dart:async';
 
+import 'package:flutter/gestures.dart' show GestureBinding, PointerCancelEvent;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'
+    show HardwareKeyboard, KeyDownEvent, KeyEvent, LogicalKeyboardKey;
 
 import 'panel.dart';
 import 'panel_config.dart';
@@ -93,6 +96,10 @@ class PanelManager extends ChangeNotifier {
     _dragSide = side;
     _dragGroup = group ?? -1;
     _dragPanelId = panelId;
+    if (!_escHandlerRegistered) {
+      HardwareKeyboard.instance.addHandler(_onHardwareKey);
+      _escHandlerRegistered = true;
+    }
     notifyListeners();
   }
 
@@ -103,13 +110,67 @@ class PanelManager extends ChangeNotifier {
   /// dispose the source Draggable before `onDragEnd` fires, which would
   /// otherwise leave the backend's cursor tracker running forever.
   void endDrag() {
+    if (_escHandlerRegistered) {
+      HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+      _escHandlerRegistered = false;
+    }
     hideDragImage();
     if (!_isDragging) return;
     _isDragging = false;
     _dragSide = null;
     _dragGroup = -1;
     _dragPanelId = null;
+    _dragPointerId = null;
     notifyListeners();
+  }
+
+  // ---- Drag cancellation --------------------------------------------------
+  //
+  // ESC and right-click cancel the in-flight drag, returning the panel to its
+  // original location — no detach, no move. The drag itself is cancelled by
+  // routing a synthetic [PointerCancelEvent] for the drag's pointer through
+  // the binding's pointer router, which makes the Draggable's avatar finish
+  // as a cancel (and run `onDraggableCanceled`, which then checks
+  // [consumeDragCancel] so it doesn't tear the panel off).
+
+  int? _dragPointerId;
+  bool _dragCancelRequested = false;
+  bool _escHandlerRegistered = false;
+
+  /// Records the pointer that went down on a tab — the pointer that will
+  /// drive the drag, if one starts — so [cancelDrag] can target the right
+  /// drag.
+  void noteDragPointer(int pointer) => _dragPointerId = pointer;
+
+  bool _onHardwareKey(KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        _isDragging) {
+      cancelDrag();
+      return true;
+    }
+    return false;
+  }
+
+  /// Cancels the in-flight drag (ESC / right-click): the panel returns to its
+  /// original location — no detach, no move.
+  void cancelDrag() {
+    if (!_isDragging) return;
+    _dragCancelRequested = true;
+    final int? pointer = _dragPointerId;
+    if (pointer != null) {
+      GestureBinding.instance.pointerRouter
+          .route(PointerCancelEvent(pointer: pointer));
+    }
+  }
+
+  /// Returns whether the in-flight drag was cancelled via [cancelDrag], and
+  /// clears the flag. Consumed by the Draggable's `onDraggableCanceled` so a
+  /// deliberate cancel doesn't tear the panel off.
+  bool consumeDragCancel() {
+    final bool v = _dragCancelRequested;
+    _dragCancelRequested = false;
+    return v;
   }
 
   // ---- Registration --------------------------------------------------------
@@ -667,6 +728,10 @@ class PanelManager extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_escHandlerRegistered) {
+      HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+      _escHandlerRegistered = false;
+    }
     _saveTimer?.cancel();
     if (config.storage != null) {
       config.storage?.write(saveLayout());

@@ -18,6 +18,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show kPrimaryButton, kSecondaryMouseButton;
 import 'package:flutter/material.dart' show Colors, Icons, Tooltip, IconButton, VisualDensity;
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/widgets.dart';
@@ -44,13 +45,29 @@ class PanelDock extends StatelessWidget {
     final PanelManager manager = PanelScope.of(context);
     void detach(String id) => manager.detach(id);
 
-    return Stack(
-      children: <Widget>[
-        Positioned.fill(child: _DockArea(manager: manager, onDetach: detach)),
-        if (manager.isDragging) Positioned.fill(child: _EmptyRegionTargets(manager: manager)),
-        if (manager.externalHoverSide != null)
-          Positioned.fill(child: _NativeDropZoneOverlay(manager: manager, activeSide: manager.externalHoverSide!)),
-      ],
+    // Right-click cancels the in-flight tab drag (returns the panel to its
+    // original dock) — see PanelManager.cancelDrag. The listener lives at the
+    // dock root so it catches the click wherever the drag is over the dock.
+    return Listener(
+      onPointerDown: (PointerDownEvent event) {
+        if (event.buttons & kSecondaryMouseButton != 0) {
+          manager.cancelDrag();
+        }
+      },
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(child: _DockArea(manager: manager, onDetach: detach)),
+          if (manager.isDragging)
+            Positioned.fill(child: _EmptyRegionTargets(manager: manager)),
+          if (manager.externalHoverSide != null)
+            Positioned.fill(
+              child: _NativeDropZoneOverlay(
+                manager: manager,
+                activeSide: manager.externalHoverSide!,
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -496,11 +513,20 @@ class _TabState extends State<_Tab> {
   /// A drop target over the dragged tab (and the no-op gaps right next to it)
   /// that simply ends the drag — so dropping a tab back on itself cancels
   /// cleanly instead of tearing it off into a floating window.
-  Widget _noopHalf() {
+  Widget _noopHalf(PanelTheme t) {
     return DragTarget<_TabDrag>(
       onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (_) => widget.manager.endDrag(),
-      builder: (_, _, _) => const SizedBox.expand(),
+      builder: (BuildContext context, List<_TabDrag?> cand, _) {
+        final bool active = cand.isNotEmpty;
+        return Container(
+          color: active ? t.accent.withValues(alpha: 0.16) : null,
+          alignment: Alignment.center,
+          child: active
+              ? Icon(Icons.undo, size: 14, color: t.accent)
+              : null,
+        );
+      },
     );
   }
 
@@ -510,6 +536,10 @@ class _TabState extends State<_Tab> {
   /// single-tab group). The *source* group only offers the meaningful slots:
   /// the gaps immediately around the dragged tab are no-ops, so they're hidden
   /// (e.g. dragging `main.dart` shows no indicator right next to itself).
+  ///
+  /// The dragged tab's own slot gets a full-area "drop to return" target with
+  /// a visible accent affordance: dropping there cancels the drag and returns
+  /// the panel to its original dock.
   Widget _wrapReorder(PanelTheme t, Widget content) {
     final PanelManager m = widget.manager;
     if (!m.isDragging) return content;
@@ -519,6 +549,50 @@ class _TabState extends State<_Tab> {
 
     final bool isSource = m.isDragSource(widget.side, widget.groupIndex);
     final int draggedIdx = isSource ? panels.indexWhere((PanelDescriptor p) => p.id == m.draggedPanelId) : -1;
+
+    // The dragged tab's own slot: dropping here cancels (returns the panel to
+    // its original position) instead of tearing it off.
+    if (isSource && idx == draggedIdx) {
+      return DragTarget<_TabDrag>(
+        onWillAcceptWithDetails: (_) => true,
+        onAcceptWithDetails: (_) => widget.manager.endDrag(),
+        builder: (BuildContext context, List<_TabDrag?> cand, _) {
+          final bool active = cand.isNotEmpty;
+          return Container(
+            decoration: BoxDecoration(
+              color: active
+                  ? t.accent.withValues(alpha: 0.22)
+                  : t.accent.withValues(alpha: 0.06),
+              border: Border.all(
+                color: active ? t.accent : t.accent.withValues(alpha: 0.55),
+                width: active ? 2 : 1,
+              ),
+              borderRadius: t.tabRadius,
+            ),
+            child: Stack(
+              fit: StackFit.passthrough,
+              children: <Widget>[
+                content,
+                if (active)
+                  Positioned.fill(
+                    child: Center(
+                      child: Text(
+                        m.config.strings.dropToReturn,
+                        style: TextStyle(
+                          color: t.accent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      );
+    }
+
     // A gap is a no-op if it sits immediately before/after the dragged tab.
     // before-half = gap `idx`; after-half = gap `idx + 1`.
     final bool showBefore = !isSource || (idx != draggedIdx && idx != draggedIdx + 1);
@@ -536,8 +610,8 @@ class _TabState extends State<_Tab> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Expanded(child: showBefore ? _reorderHalf(t, idx, true) : _noopHalf()),
-              Expanded(child: showAfter ? _reorderHalf(t, idx, false) : _noopHalf()),
+              Expanded(child: showBefore ? _reorderHalf(t, idx, true) : _noopHalf(t)),
+              Expanded(child: showAfter ? _reorderHalf(t, idx, false) : _noopHalf(t)),
             ],
           ),
         ),
@@ -571,10 +645,12 @@ class _TabState extends State<_Tab> {
         widget.manager.endDrag();
       },
       onDraggableCanceled: (_, _) {
+        final bool cancelled = widget.manager.consumeDragCancel();
         // Hide before detaching so the overlay doesn't linger over the
         // freshly-opened floating window.
         widget.manager.hideDragImage();
-        if (widget.manager.config.allowDetach &&
+        if (!cancelled &&
+            widget.manager.config.allowDetach &&
             widget.manager.supportsDetach &&
             widget.manager.descriptor(widget.descriptor.id).detachable) {
           widget.onDetach(widget.descriptor.id);
@@ -606,9 +682,18 @@ class _TabState extends State<_Tab> {
           onEnter: (_) => setState(() => _hovered = true),
           onExit: (_) => setState(() => _hovered = false),
           cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => widget.manager.setActiveInGroup(widget.side, widget.groupIndex, widget.descriptor.id),
-            child: _label(context, t, selected: widget.selected, hovered: _hovered),
+          child: Listener(
+            // Record the pointer that pressed the tab so ESC / right-click
+            // can cancel the drag that (possibly) starts from it.
+            onPointerDown: (PointerDownEvent event) {
+              if (event.buttons & kPrimaryButton != 0) {
+                widget.manager.noteDragPointer(event.pointer);
+              }
+            },
+            child: GestureDetector(
+              onTap: () => widget.manager.setActiveInGroup(widget.side, widget.groupIndex, widget.descriptor.id),
+              child: _label(context, t, selected: widget.selected, hovered: _hovered),
+            ),
           ),
         ),
       ),
@@ -723,15 +808,16 @@ class _GroupDropZonesState extends State<_GroupDropZones> {
     final double edge = widget.manager.config.dropEdgeFraction;
     final PanelTheme t = widget.manager.config.themeOf(context);
 
-    // Dragging a tab back onto its own group is a no-op: don't offer "add tab"
-    // here, and only offer split-out if the group has more than one tab.
+    // Dragging a tab back onto its own group returns it to its original
+    // dock — the whole group body is a "drop to return" zone (no add-tab, no
+    // split-out here; splitting stays available via other groups / the split
+    // button).
     final bool isSource = widget.manager.isDragSource(widget.side, widget.groupIndex);
-    final int tabCount = widget.manager.panelsInGroup(widget.side, widget.groupIndex).length;
     final List<_Drop> kinds;
-    if (!allowSplit) {
-      kinds = isSource ? const <_Drop>[] : const <_Drop>[_Drop.tab];
-    } else if (isSource) {
-      kinds = tabCount > 1 ? const <_Drop>[_Drop.before, _Drop.after] : const <_Drop>[];
+    if (isSource) {
+      kinds = const <_Drop>[];
+    } else if (!allowSplit) {
+      kinds = const <_Drop>[_Drop.tab];
     } else {
       kinds = _Drop.values;
     }
@@ -763,15 +849,41 @@ class _GroupDropZonesState extends State<_GroupDropZones> {
 
         return Stack(
           children: <Widget>[
-            // For the source group, a full-area target that accepts but does
-            // nothing — so dropping a tab back on itself just cancels (no
-            // preview, and no accidental tear-off via onDraggableCanceled).
+            // The source group: the whole body is a "drop to return" zone —
+            // dropping anywhere here ends the drag and returns the panel to
+            // its original position (no accidental tear-off). Painted with a
+            // visible accent affordance, stronger while hovered.
             if (isSource)
               Positioned.fill(
                 child: DragTarget<_TabDrag>(
                   onWillAcceptWithDetails: (_) => true,
                   onAcceptWithDetails: (_) => widget.manager.endDrag(),
-                  builder: (_, _, _) => const SizedBox.expand(),
+                  builder: (BuildContext context, List<_TabDrag?> cand, _) {
+                    final bool active = cand.isNotEmpty;
+                    return Container(
+                      margin: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: active
+                            ? t.accent.withValues(alpha: 0.18)
+                            : t.accent.withValues(alpha: 0.05),
+                        border: Border.all(
+                          color: active
+                              ? t.accent
+                              : t.accent.withValues(alpha: 0.45),
+                          width: active ? 2 : 1,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        widget.manager.config.strings.dropToReturn,
+                        style: TextStyle(
+                          color: t.accent,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
             if (preview != null) Positioned.fromRect(rect: preview, child: _previewBox(t, _hover!)),

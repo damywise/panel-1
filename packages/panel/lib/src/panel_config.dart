@@ -177,6 +177,7 @@ class PanelDockStrings {
     this.newGroup = 'New group',
     this.dropHere = 'Drop here',
     this.emptyCenter = 'Drop a panel here',
+    this.dropToReturn = 'Drop to return',
     this.minimizeDockTooltip = 'Minimize {side} dock',
     this.detachTooltip = 'Detach to a floating window',
     this.splitTooltip = 'Split: move tab beside',
@@ -198,6 +199,10 @@ class PanelDockStrings {
 
   /// Placeholder shown in an empty center region when not dragging.
   final String emptyCenter;
+
+  /// Label shown on the dragged tab's original slot while dragging: dropping
+  /// there returns the panel to its original dock (cancels the drag).
+  final String dropToReturn;
 
   /// Tooltip for the dock collapse/minimize button. `{side}` is replaced with
   /// the lower-cased side name.
