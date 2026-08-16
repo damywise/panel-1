@@ -55,6 +55,14 @@ class PanelDock extends StatelessWidget {
           manager.cancelDrag();
         }
       },
+      onPointerMove: (PointerMoveEvent event) {
+        // Flutter's Windows mouse model keeps ONE pointer for the cursor, so a
+        // right-click during an active drag shows up as a move with updated
+        // buttons (0x3 = left|right), not a new pointer-down.
+        if (event.buttons & kSecondaryMouseButton != 0) {
+          manager.cancelDrag();
+        }
+      },
       child: Stack(
         children: <Widget>[
           Positioned.fill(child: _DockArea(manager: manager, onDetach: detach)),
