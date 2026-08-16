@@ -97,7 +97,13 @@ class PanelManager extends ChangeNotifier {
   }
 
   /// Called by the UI when a tab drag ends.
+  ///
+  /// Also hides the drag image. Doing it here (rather than only in the
+  /// Draggable callbacks) covers every end path: dropping on a target can
+  /// dispose the source Draggable before `onDragEnd` fires, which would
+  /// otherwise leave the backend's cursor tracker running forever.
   void endDrag() {
+    hideDragImage();
     if (!_isDragging) return;
     _isDragging = false;
     _dragSide = null;
@@ -422,6 +428,36 @@ class PanelManager extends ChangeNotifier {
 
   /// Minimizes the floating window for [id].
   void minimizeFloating(String id) => _windowing.minimize(id);
+
+  // ---- Drag image (tear-off preview) --------------------------------------
+
+  /// Whether the active backend can paint a drag image on the cursor while a
+  /// tab is dragged outside the main window.
+  bool get supportsDragImage => _windowing.supportsDragImage;
+
+  /// Backend hook: show [image] following the cursor while a tab is dragged
+  /// outside the main window.
+  void showDragImage(PanelDragImage image) => _windowing.showDragImage(image);
+
+  /// Backend hook: hide the drag image shown by [showDragImage].
+  void hideDragImage() => _windowing.hideDragImage();
+
+  bool _dragImageActive = false;
+
+  /// Whether the backend's drag image is currently visible on the cursor.
+  ///
+  /// While true, the dock hides its own Flutter drag feedback so the overlay
+  /// (which polls the cursor on a timer) and the pointer-synced feedback never
+  /// render the pill twice — the overlay covers the poke-out/outside cases
+  /// where the feedback would be clipped or invisible anyway.
+  bool get dragImageActive => _dragImageActive;
+
+  /// Backend hook: report whether the drag image is currently visible.
+  void setDragImageActive(bool active) {
+    if (_dragImageActive == active) return;
+    _dragImageActive = active;
+    notifyListeners();
+  }
 
   // ---- External (backend-driven) drag-back snapping ------------------------
   //

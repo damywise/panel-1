@@ -32,4 +32,5 @@ export 'src/panel_dock.dart' show PanelDock;
 export 'src/panel_manager.dart' show PanelManager, PanelScope;
 export 'src/panel_shortcuts.dart'
     show MergePanelIntent, SplitPanelIntent, defaultPanelShortcuts, panelActions;
-export 'src/panel_windowing.dart' show PanelWindowingBackend, DisabledWindowing;
+export 'src/panel_windowing.dart'
+    show PanelWindowingBackend, DisabledWindowing, PanelDragImage;

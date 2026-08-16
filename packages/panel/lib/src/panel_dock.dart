@@ -15,12 +15,17 @@
 // Platform-generic: no windowing/native imports. Detaching is delegated to the
 // manager's backend via `manager.detach(id)`.
 
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart' show Colors, Icons, Tooltip, IconButton, VisualDensity;
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/widgets.dart';
 
 import 'panel.dart';
 import 'panel_config.dart';
 import 'panel_manager.dart';
+import 'panel_windowing.dart';
 
 /// Drag payload for a tab being dragged.
 class _TabDrag {
@@ -410,6 +415,61 @@ class _Tab extends StatefulWidget {
 class _TabState extends State<_Tab> {
   bool _hovered = false;
 
+  /// The dragged tab's pill, captured once the drag feedback has laid out.
+  /// The image is handed to the windowing backend so it can keep the pill
+  /// visible on the cursor even after the pointer leaves the main window.
+  final GlobalKey _dragFeedbackKey = GlobalKey();
+
+  /// Room reserved around the pill when capturing so its drop shadow isn't
+  /// clipped. Must match [PanelDragImage.anchorOffset] (the pill content's
+  /// offset within the captured image) so the overlay lines up with the
+  /// in-window feedback.
+  static const double _dragShadowMargin = 16.0;
+
+  /// Keeps the pill's top-left under the cursor (the same visual as
+  /// [pointerDragAnchorStrategy]) while compensating for the shadow margin
+  /// added around the captured feedback: the feedback box is pulled back by
+  /// the margin, so the pill inside it lands exactly where the un-padded
+  /// feedback used to.
+  static Offset _dragAnchorStrategy(
+    Draggable<Object> draggable,
+    BuildContext context,
+    Offset position,
+  ) {
+    return const Offset(_dragShadowMargin, _dragShadowMargin);
+  }
+
+  /// Captures the in-flight drag feedback (the pill) and forwards it to the
+  /// backend for display on the cursor outside the main window. Runs one
+  /// frame after the drag starts so the feedback is laid out and painted.
+  /// Fail-soft: no external drag image just means the pill disappears at the
+  /// window edge (the pre-existing behavior).
+  Future<void> _captureDragImage() async {
+    final BuildContext? boundaryContext = _dragFeedbackKey.currentContext;
+    final RenderRepaintBoundary? boundary =
+        boundaryContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null || boundary.debugNeedsPaint) return;
+    final double dpr = View.of(boundaryContext!).devicePixelRatio;
+    try {
+      final ui.Image image = await boundary.toImage(pixelRatio: dpr);
+      final ByteData? data =
+          await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final int w = image.width;
+      final int h = image.height;
+      image.dispose();
+      if (data == null || !widget.manager.isDragging) return;
+      widget.manager.showDragImage(PanelDragImage(
+        rgba: data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        width: w,
+        height: h,
+        logicalSize: Size(w / dpr, h / dpr),
+        anchorOffset: const Offset(_dragShadowMargin, _dragShadowMargin),
+      ));
+    } catch (_) {
+      // Fail soft: tearing off still works without the external drag image.
+    }
+  }
+
   Widget _label(BuildContext context, PanelTheme t, {required bool selected, required bool hovered}) {
     final PanelTabSpec spec = PanelTabSpec(descriptor: widget.descriptor, selected: selected, hovered: hovered, theme: t);
     final Widget? custom = widget.manager.config.tabBuilder?.call(context, spec);
@@ -491,10 +551,29 @@ class _TabState extends State<_Tab> {
 
     return Draggable<_TabDrag>(
       data: _TabDrag(widget.descriptor.id),
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      onDragStarted: () => widget.manager.beginDrag(side: widget.side, group: widget.groupIndex, panelId: widget.descriptor.id),
-      onDragEnd: (_) => widget.manager.endDrag(),
+      dragAnchorStrategy: _dragAnchorStrategy,
+      onDragStarted: () {
+        widget.manager.beginDrag(side: widget.side, group: widget.groupIndex, panelId: widget.descriptor.id);
+        if (widget.manager.supportsDragImage) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            // The tab's State may already be unmounted (the dock swaps the
+            // group's tree to show drop zones), so gate on the feedback
+            // context — it lives in the overlay and stays alive for the drag.
+            if (widget.manager.isDragging && _dragFeedbackKey.currentContext != null) {
+              _captureDragImage().ignore();
+            }
+          });
+        }
+      },
+      onDragEnd: (_) {
+        // `endDrag` hides the drag image (covers drops that dispose the
+        // Draggable before this callback would run).
+        widget.manager.endDrag();
+      },
       onDraggableCanceled: (_, _) {
+        // Hide before detaching so the overlay doesn't linger over the
+        // freshly-opened floating window.
+        widget.manager.hideDragImage();
         if (widget.manager.config.allowDetach &&
             widget.manager.supportsDetach &&
             widget.manager.descriptor(widget.descriptor.id).detachable) {
@@ -502,7 +581,24 @@ class _TabState extends State<_Tab> {
         }
         widget.manager.endDrag();
       },
-      feedback: _DragFeedback(theme: t, child: _label(context, t, selected: true, hovered: false)),
+      feedback: ListenableBuilder(
+        listenable: widget.manager,
+        // While the backend's overlay is visible (pill poking out of the
+        // window or the cursor outside), it draws the pill itself — hide the
+        // Flutter feedback so the two never render simultaneously. The pill
+        // subtree is built once here (pre-drag) to avoid rebuilding it with a
+        // deactivated context mid-drag.
+        builder: (BuildContext context, Widget? child) =>
+            widget.manager.dragImageActive ? const SizedBox.shrink() : child!,
+        child: RepaintBoundary(
+          key: _dragFeedbackKey,
+          child: Padding(
+            // Room for the pill's shadow so the capture isn't clipped.
+            padding: const EdgeInsets.all(_dragShadowMargin),
+            child: _DragFeedback(theme: t, child: _label(context, t, selected: true, hovered: false)),
+          ),
+        ),
+      ),
       childWhenDragging: Opacity(opacity: 0.35, child: _label(context, t, selected: widget.selected, hovered: false)),
       child: _wrapReorder(
         t,
