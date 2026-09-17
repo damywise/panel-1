@@ -6,7 +6,19 @@
 //   * drop on a group's CENTER  -> add as a tab to that group
 //   * drop on a group's leading/trailing EDGE -> new group beside it (split)
 //   * drop on an empty region's edge -> create the first group there
-//   * drop outside the window -> tear off into a floating OS window
+//   * drag out of the dock (past `config.popOutDistance`) -> TEAR OFF: the pane
+//     becomes its own OS window at its own rect, showing its own live content,
+//     following the cursor; release over a zone re-docks it, elsewhere it stays
+//     floating. Inside the dock the drag stays a normal dock drag.
+//     `config.tearOffOnDragStart` drops both clauses — the window opens at the
+//     drag's own start — and suppresses the pill, because then the pane is the
+//     drag visual and a ghost of the tab must never be drawn.
+//   * release outside the window (no tear-off backend) -> the legacy pill,
+//     then detach
+//
+// The drag's own subtree must stay put while a drag is in flight: replacing the
+// `Draggable` mid-gesture silently kills its remaining callbacks. See the
+// comment on `PanelGroup.body`.
 //
 // All colors come from `PanelTheme` (see PanelDockConfig.themeOf), not Material's
 // ColorScheme, so the dock has no Material surface tint and can be themed
@@ -15,6 +27,7 @@
 // Platform-generic: no windowing/native imports. Detaching is delegated to the
 // manager's backend via `manager.detach(id)`.
 
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -35,21 +48,53 @@ class _TabDrag {
   final String panelId;
 }
 
+/// The whole view, in logical pixels: the fallback bounds for a tab drag when
+/// the dock has not reported its own rect yet (or when it fills the view, which
+/// is the usual case).
+Rect _viewRect(BuildContext context) {
+  // `FlutterView` is not re-exported by `package:flutter/widgets.dart`.
+  final view = View.of(context);
+  final double dpr = view.devicePixelRatio;
+  final Size physical = view.physicalSize;
+  return dpr > 0
+      ? Rect.fromLTWH(0, 0, physical.width / dpr, physical.height / dpr)
+      : Offset.zero & physical;
+}
+
 /// The root workspace widget. Render it in the body of your main window's
 /// container. All sizing/labels/capabilities/colors come from the
 /// [PanelManager]'s `PanelDockConfig` (provided via [PanelScope]).
-class PanelDock extends StatelessWidget {
+class PanelDock extends StatefulWidget {
   const PanelDock({super.key});
+
+  @override
+  State<PanelDock> createState() => _PanelDockState();
+}
+
+class _PanelDockState extends State<PanelDock> {
+  /// The dock's own bounds, so a tab drag can tell "still over the workspace"
+  /// from "taken out of it" (see `_TabState.onDragUpdate`).
+  final GlobalKey _rootKey = GlobalKey();
 
   @override
   Widget build(BuildContext context) {
     final PanelManager manager = PanelScope.of(context);
     void detach(String id) => manager.detach(id);
 
+    // Reported after the first frame that follows each build: the render object
+    // of this very widget does not exist yet while it is being built.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final RenderObject? renderObject = _rootKey.currentContext?.findRenderObject();
+      if (renderObject is RenderBox && renderObject.hasSize) {
+        manager.reportDockRect(renderObject.localToGlobal(Offset.zero) & renderObject.size);
+      }
+    });
+
     // Right-click cancels the in-flight tab drag (returns the panel to its
     // original dock) — see PanelManager.cancelDrag. The listener lives at the
     // dock root so it catches the click wherever the drag is over the dock.
     return Listener(
+      key: _rootKey,
       onPointerDown: (PointerDownEvent event) {
         if (event.buttons & kSecondaryMouseButton != 0) {
           manager.cancelDrag();
@@ -196,10 +241,12 @@ class _CenterArea extends StatelessWidget {
           return Container(
             color: active ? Color.alphaBlend(t.accent.withValues(alpha: 0.12), t.surface) : t.surface,
             alignment: Alignment.center,
-            child: Text(
-              manager.isDragging ? manager.config.strings.dropHere : manager.config.strings.emptyCenter,
-              style: TextStyle(color: t.mutedText, fontSize: 13),
-            ),
+            child: manager.isDragging
+                ? _DropChip(theme: t, icon: Icons.add, label: manager.config.strings.dropHere)
+                : Text(
+                    manager.config.strings.emptyCenter,
+                    style: TextStyle(color: t.mutedText, fontSize: 13),
+                  ),
           );
         },
       );
@@ -300,6 +347,7 @@ class PanelGroup extends StatelessWidget {
             manager: manager,
             side: side,
             groupIndex: groupIndex,
+            axis: axis,
             panels: panels,
             activeId: active?.id,
             canSplit: panels.length >= 2,
@@ -309,7 +357,7 @@ class PanelGroup extends StatelessWidget {
           Expanded(
             child: active == null
                 ? const SizedBox.shrink()
-                : KeyedSubtree(key: ValueKey<String>('panel-body-${active.id}'), child: active.builder(context)),
+                : manager.contentOf(active.id, context),
           ),
         ],
       ),
@@ -317,21 +365,30 @@ class PanelGroup extends StatelessWidget {
 
     // The drop-zone overlay covers only the body (below the tab strip), leaving
     // the strip free for tab drag-to-reorder targets.
+    //
+    // The group stays a *non-positioned* child of an always-present [Stack], so
+    // the drag overlay appearing cannot change its type or its slot in the tree.
+    // That matters more than it looks: rebuilding the group would replace the
+    // very `Draggable` whose gesture is driving the drag — its `onDragUpdate`
+    // and `onDragEnd` are gated on the `State` still being mounted — so the
+    // drag would silently freeze one frame after it started (no pill capture,
+    // no drop-zone feedback, and no tear-off threshold). `StackFit.passthrough`
+    // hands the group exactly the constraints it received before.
     final double stripH = manager.config.tabStripHeight + t.tabDividerThickness;
-    final Widget body = !manager.isDragging
-        ? group
-        : Stack(
-            children: <Widget>[
-              Positioned.fill(child: group),
-              Positioned(
-                top: stripH,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _GroupDropZones(manager: manager, side: side, groupIndex: groupIndex, axis: axis),
-              ),
-            ],
-          );
+    final Widget body = Stack(
+      fit: StackFit.passthrough,
+      children: <Widget>[
+        group,
+        if (manager.isDragging)
+          Positioned(
+            top: stripH,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _GroupDropZones(manager: manager, side: side, groupIndex: groupIndex, axis: axis),
+          ),
+      ],
+    );
     // Clicking anywhere in the group focuses it (target for split/merge keys).
     return Listener(
       onPointerDown: (_) => manager.setFocusedGroup(side, groupIndex),
@@ -348,6 +405,7 @@ class _TabStrip extends StatelessWidget {
     required this.manager,
     required this.side,
     required this.groupIndex,
+    required this.axis,
     required this.panels,
     required this.activeId,
     required this.canSplit,
@@ -357,6 +415,7 @@ class _TabStrip extends StatelessWidget {
   final PanelManager manager;
   final DockSide side;
   final int groupIndex;
+  final Axis axis;
   final List<PanelDescriptor> panels;
   final String? activeId;
   final bool canSplit;
@@ -386,7 +445,7 @@ class _TabStrip extends StatelessWidget {
             _StripButton(
               tooltip: str.splitTooltip,
               color: t.mutedText,
-              icon: side == DockSide.bottom || side == DockSide.center ? Icons.splitscreen : Icons.horizontal_split,
+              icon: _splitIcon(axis),
               onPressed: () => manager.splitActiveGroup(side, groupIndex),
             ),
           if (cfg.allowDetach && manager.supportsDetach && activeId != null && manager.descriptor(activeId!).detachable)
@@ -446,6 +505,12 @@ class _Tab extends StatefulWidget {
 class _TabState extends State<_Tab> {
   bool _hovered = false;
 
+  /// Where the pointer went down on this tab, in the main view's logical
+  /// coordinates. It is both the tear-off threshold's origin
+  /// ([PanelDockConfig.popOutDistance]) — so a plain click never pops a window
+  /// out — and the anchor `pointerInPane` of a tear-off.
+  Offset? _pressGlobal;
+
   /// The dragged tab's pill, captured once the drag feedback has laid out.
   /// The image is handed to the windowing backend so it can keep the pill
   /// visible on the cursor even after the pointer leaves the main window.
@@ -499,6 +564,35 @@ class _TabState extends State<_Tab> {
     } catch (_) {
       // Fail soft: tearing off still works without the external drag image.
     }
+  }
+
+  /// Turns this tab's pane into its own window, anchored on [press].
+  ///
+  /// Shared by both tear-off gates, which differ only in *when* they call it:
+  /// [PanelDockConfig.tearOffOnDragStart] at the drag's own start (with
+  /// [PanelDockConfig.popOutDistance] as a retry), and the default one after
+  /// [PanelDockConfig.popOutDistance] **and** once the pointer leaves the dock.
+  /// The pane's rect is measured here, so the window opens exactly where the pane
+  /// was — and for a tab that is not its group's active one the measurement
+  /// resolves through the group's shared body slot (see [PanelManager.paneRect]).
+  void _startTearOff(PanelManager m, Offset press) {
+    final String id = widget.descriptor.id;
+    if (m.isTornOff(id) || !m.canTearOff(id)) return;
+    final PanelTheme t = m.config.themeOf(context);
+    final double headerHeight = m.config.tabStripHeight + t.tabDividerThickness;
+    final Rect? paneRect = m.paneRect(id, headerHeight: headerHeight);
+    if (paneRect == null) return;
+    // The anchor is where the pointer went DOWN, not where it crossed a
+    // threshold, so the window travels exactly as far as the pointer did: the
+    // pane behaves like something the user picked up by that point, however far
+    // from the dock's edge they let go of the dock. The backend owns the rest of
+    // the gesture (see PanelWindowingBackend.openTearOff).
+    m.beginTearOff(
+      id,
+      paneRect: paneRect,
+      headerHeight: headerHeight,
+      pointerInPane: press - paneRect.topLeft,
+    );
   }
 
   Widget _label(BuildContext context, PanelTheme t, {required bool selected, required bool hovered}) {
@@ -610,17 +704,63 @@ class _TabState extends State<_Tab> {
       data: _TabDrag(widget.descriptor.id),
       dragAnchorStrategy: _dragAnchorStrategy,
       onDragStarted: () {
-        widget.manager.beginDrag(side: widget.side, group: widget.groupIndex, panelId: widget.descriptor.id);
-        if (widget.manager.supportsDragImage) {
+        final PanelManager m = widget.manager;
+        m.beginDrag(side: widget.side, group: widget.groupIndex, panelId: widget.descriptor.id);
+        // With tear-off-on-drag on there is no pill to rasterize onto a layered
+        // window: the pane *is* the drag visual. Immediate mode does not draw the
+        // pill in-process either — see `feedback` below.
+        if (m.supportsDragImage && !m.tearOffOnDrag) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             // The tab's State may already be unmounted (the dock swaps the
             // group's tree to show drop zones), so gate on the feedback
             // context — it lives in the overlay and stays alive for the drag.
-            if (widget.manager.isDragging && _dragFeedbackKey.currentContext != null) {
+            if (m.isDragging && _dragFeedbackKey.currentContext != null) {
               _captureDragImage().ignore();
             }
           });
         }
+        if (!m.tearOffAtDragStart) return;
+        final Offset? press = _pressGlobal;
+        if (press == null) return;
+        // The pane is a window on the drag's *own* first frame: the user asked
+        // for the window, not for a ghost of the tab, so nothing may be shown in
+        // between. It cannot be done inline — `MultiDragGestureRecognizer` only
+        // takes a client once the callback that started it has returned, so
+        // routing the `PointerCancelEvent` from here would clear the pending
+        // delta out from under `state._startDrag` (a null-check crash, and a drag
+        // nobody would ever end). A microtask runs after the whole pointer
+        // dispatch, still before the next frame is built, so the cancel lands
+        // exactly as it does from `onDragUpdate` and no frame ever paints the
+        // tab's `childWhenDragging`, a drop zone or a pill.
+        scheduleMicrotask(() {
+          if (mounted && m.isDragging) _startTearOff(m, press);
+        });
+      },
+      onDragUpdate: (DragUpdateDetails details) {
+        final PanelManager m = widget.manager;
+        final String id = widget.descriptor.id;
+        if (m.isTornOff(id)) return;
+        final Offset? press = _pressGlobal;
+        if (press == null) return;
+        if ((details.globalPosition - press).distance < m.config.popOutDistance) {
+          return;
+        }
+        if (!m.canTearOff(id)) return;
+        if (!m.tearOffAtDragStart) {
+          // Still over the workspace: this is a dock drag — reorder, split, drop
+          // on another group or region — and every one of those targets is
+          // *inside* the dock, so tearing off here would make them all
+          // unreachable. The pane only leaves the workspace when the pointer
+          // leaves the dock's bounds (Chrome detaches a tab on leaving its
+          // window for the same reason: the in-window targets have to stay
+          // reachable).
+          final Rect bounds = m.dockRect ?? _viewRect(context);
+          if (bounds.contains(details.globalPosition)) return;
+        }
+        // Immediate mode got here only if the drag's own start could not tear the
+        // pane off (`_startTearOff` found no rect yet); `popOutDistance` is the
+        // retry that keeps the gesture from silently degrading into a dock drag.
+        _startTearOff(m, press);
       },
       onDragEnd: (_) {
         // `endDrag` hides the drag image (covers drops that dispose the
@@ -628,27 +768,41 @@ class _TabState extends State<_Tab> {
         widget.manager.endDrag();
       },
       onDraggableCanceled: (_, _) {
-        final bool cancelled = widget.manager.consumeDragCancel();
+        final PanelManager m = widget.manager;
+        // A tear-off cancels this drag on purpose: the pane is already a
+        // window, so there is nothing left to detach.
+        final bool tornOff = m.isTornOff(widget.descriptor.id);
+        final bool cancelled = m.consumeDragCancel();
         // Hide before detaching so the overlay doesn't linger over the
         // freshly-opened floating window.
-        widget.manager.hideDragImage();
-        if (!cancelled &&
-            widget.manager.config.allowDetach &&
-            widget.manager.supportsDetach &&
-            widget.manager.descriptor(widget.descriptor.id).detachable) {
+        m.hideDragImage();
+        if (!tornOff &&
+            !cancelled &&
+            m.config.allowDetach &&
+            m.supportsDetach &&
+            m.descriptor(widget.descriptor.id).detachable) {
           widget.onDetach(widget.descriptor.id);
         }
-        widget.manager.endDrag();
+        m.endDrag();
       },
       feedback: ListenableBuilder(
         listenable: widget.manager,
-        // While the backend's overlay is visible (pill poking out of the
-        // window or the cursor outside), it draws the pill itself — hide the
-        // Flutter feedback so the two never render simultaneously. The pill
-        // subtree is built once here (pre-drag) to avoid rebuilding it with a
-        // deactivated context mid-drag.
-        builder: (BuildContext context, Widget? child) =>
-            widget.manager.dragImageActive ? const SizedBox.shrink() : child!,
+        // In immediate mode the pane itself is the drag visual, so the tab-shaped
+        // pill must never be drawn — not even for the one frame between the drag
+        // being recognised and the window opening. The user asked for the
+        // detached window, and a pill that appears first is precisely what they
+        // do not want. When the pane *cannot* tear off, the pill is the only
+        // affordance the drag has, so it stays.
+        builder: (BuildContext context, Widget? child) {
+          final PanelManager m = widget.manager;
+          final bool paneIsTheDragVisual =
+              m.tearOffAtDragStart && m.canTearOff(widget.descriptor.id);
+          return m.dragImageActive ||
+                  paneIsTheDragVisual ||
+                  m.isTornOff(widget.descriptor.id)
+              ? const SizedBox.shrink()
+              : child!;
+        },
         child: RepaintBoundary(
           key: _dragFeedbackKey,
           child: Padding(
@@ -670,6 +824,7 @@ class _TabState extends State<_Tab> {
             // can cancel the drag that (possibly) starts from it.
             onPointerDown: (PointerDownEvent event) {
               if (event.buttons & kPrimaryButton != 0) {
+                _pressGlobal = event.position;
                 widget.manager.noteDragPointer(event.pointer);
               }
             },
@@ -750,6 +905,71 @@ class _TabLabel extends StatelessWidget {
     );
   }
 }
+
+/// Drop-target affordance: one glyph on its own opaque chip.
+///
+/// The chip matters - a drop preview is a translucent accent wash over whatever
+/// the panel is showing (video frame, caption list, timeline lanes), so a glyph
+/// painted straight onto that wash picks up the colours behind it and stops
+/// reading as a glyph. The glyph alone is enough because the preview rect
+/// already says *where* the panel lands: a whole group = join as a tab, half a
+/// group = split into a new group, a side strip = that dock. [label] stays on
+/// only as the semantic name, so localized [PanelDockStrings] are not lost to
+/// screen readers.
+class _DropChip extends StatelessWidget {
+  const _DropChip({
+    required this.theme,
+    required this.icon,
+    required this.label,
+    this.flipX = false,
+    this.flipY = false,
+  });
+
+  final PanelTheme theme;
+  final IconData icon;
+  final String label;
+
+  /// Mirror the glyph on its X/Y axis. Both split glyphs are asymmetric - one
+  /// pane solid, one outlined - so mirroring is what makes a leading split read
+  /// as the mirror image of the trailing one, with the solid pane on the half
+  /// the dropped panel will occupy.
+  final bool flipX;
+  final bool flipY;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget glyph = Icon(icon, size: 18, color: theme.text, semanticLabel: label);
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: theme.overlayBackground,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: theme.accent),
+      ),
+      child: flipX || flipY ? Transform.flip(flipX: flipX, flipY: flipY, child: glyph) : glyph,
+    );
+  }
+}
+
+/// Glyph for a side dock's drop target - the preview rect already shows which
+/// side it is, the arrow only reinforces it.
+IconData _dockIcon(DockSide side) => switch (side) {
+  DockSide.left => Icons.arrow_back,
+  DockSide.right => Icons.arrow_forward,
+  DockSide.bottom => Icons.arrow_downward,
+  DockSide.center => Icons.add,
+};
+
+/// Split affordance, following the direction the split actually goes: a
+/// horizontal region divides into columns, a vertical one stacks rows.
+///
+/// Deliberately not `Icons.splitscreen`: that glyph is an outlined two-row
+/// screen - a horizontal seam, the same direction as `horizontal_split` - so it
+/// never named the columns direction, and the two cases read as the same icon.
+/// `vertical_split` draws two side-by-side panes and `horizontal_split` two
+/// stacked ones; both stay unmistakable at chip size.
+IconData _splitIcon(Axis axis) =>
+    axis == Axis.horizontal ? Icons.vertical_split : Icons.horizontal_split;
 
 /// In-group drop zones shown during a drag: center = add tab, leading/trailing
 /// edge = split into a new group. Paints a clear preview of where it'll land.
@@ -858,18 +1078,19 @@ class _GroupDropZonesState extends State<_GroupDropZones> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       alignment: Alignment.center,
-                      child: Text(
-                        widget.manager.config.strings.dropToReturn,
-                        style: TextStyle(
-                          color: t.accent,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      // Same glyph as the no-op gaps beside the dragged tab:
+                      // dropping here cancels the drag and puts it back.
+                      child: _DropChip(
+                        theme: t,
+                        icon: Icons.undo,
+                        label: widget.manager.config.strings.dropToReturn,
                       ),
                     );
                   },
                 ),
               ),
-            if (preview != null) Positioned.fromRect(rect: preview, child: _previewBox(t, _hover!)),
+            if (preview != null)
+              Positioned.fromRect(rect: preview, child: _previewBox(t, _hover!)),
             for (final _Drop kind in kinds)
               Positioned.fromRect(
                 rect: zoneRect(kind),
@@ -893,6 +1114,11 @@ class _GroupDropZonesState extends State<_GroupDropZones> {
 
   Widget _previewBox(PanelTheme t, _Drop kind) {
     final PanelDockStrings str = widget.manager.config.strings;
+    // A trailing split is the strip button's own action, so it keeps that
+    // button's glyph; a leading split mirrors it, putting the filled pane on
+    // the half the new group lands on (top/bottom in a vertically stacked
+    // region, left/right in a horizontal one).
+    final bool leading = kind == _Drop.before;
     return IgnorePointer(
       child: Container(
         margin: const EdgeInsets.all(4),
@@ -902,7 +1128,16 @@ class _GroupDropZonesState extends State<_GroupDropZones> {
           borderRadius: BorderRadius.circular(8),
         ),
         alignment: Alignment.center,
-        child: Text(kind == _Drop.tab ? str.addTab : str.newGroup, style: TextStyle(color: t.accent, fontWeight: FontWeight.w700)),
+        child: _DropChip(
+          theme: t,
+          icon: switch (kind) {
+            _Drop.tab => Icons.add,
+            _Drop.before || _Drop.after => _splitIcon(widget.axis),
+          },
+          flipX: leading && widget.axis == Axis.horizontal,
+          flipY: leading && widget.axis == Axis.vertical,
+          label: kind == _Drop.tab ? str.addTab : str.newGroup,
+        ),
       ),
     );
   }
@@ -1096,7 +1331,11 @@ class _EmptyRegionTargets extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
           ),
           alignment: Alignment.center,
-          child: Text(manager.config.strings.dockIntoLabel(side), textAlign: TextAlign.center, style: TextStyle(color: t.accent, fontWeight: FontWeight.w600)),
+          child: _DropChip(
+            theme: t,
+            icon: _dockIcon(side),
+            label: manager.config.strings.dockIntoLabel(side),
+          ),
         );
       },
     );
@@ -1165,7 +1404,11 @@ class _NativeDropZoneOverlay extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   alignment: Alignment.center,
-                  child: Text(manager.config.strings.dockMenuItemLabel(activeSide), style: TextStyle(color: t.accent, fontWeight: FontWeight.w700)),
+                  child: _DropChip(
+                    theme: t,
+                    icon: _dockIcon(activeSide),
+                    label: manager.config.strings.dockMenuItemLabel(activeSide),
+                  ),
                 ),
               ),
             ],

@@ -74,6 +74,21 @@ class PanelManager extends ChangeNotifier {
   // id -> the dock it should snap back to. Generic (no platform types).
   final Map<String, DockSide> _floatingOrigin = <String, DockSide>{};
 
+  /// Mints (and remembers) the [GlobalKey] wrapping each panel's content, so
+  /// the same element moves between the docked group and the torn-off window.
+  /// See [PanelDescriptor.contentKey] and [contentOf].
+  final Map<String, GlobalKey> _contentKeys = <String, GlobalKey>{};
+
+  // ---- Tear-off state ------------------------------------------------------
+
+  /// The panel currently being torn off (dragged as its own window), if any.
+  ///
+  /// Distinct from [_isDragging]: the Flutter tab drag is *cancelled* the
+  /// moment the pane becomes a window (the backend owns the gesture from then
+  /// on), but the dock still suppresses the legacy detach path and the pill
+  /// until the tear-off finishes.
+  String? _tearOffId;
+
   // ---- Drag/drop state -----------------------------------------------------
   bool _isDragging = false;
   DockSide? _dragSide;
@@ -90,17 +105,139 @@ class PanelManager extends ChangeNotifier {
   /// Drop targets use this to suppress no-op "drop onto yourself" actions.
   bool isDragSource(DockSide side, int gi) => _dragSide == side && _dragGroup == gi;
 
+  /// The panel's docked pane rect (tab strip **and** body) in the main view's
+  /// logical coordinates, measured live from [contentKeyOf].
+  ///
+  /// This is what a tear-off hands the backend: the pane keeps its own rect, so
+  /// the window needs no reflow — only a header of [headerHeight] where the tab
+  /// strip was.
+  ///
+  /// The content is the *last* child of the group and fills its width, so the
+  /// group is the content's rect grown upwards by [headerHeight] (the strip plus
+  /// its divider). That one measurement covers the strip's height, the divider
+  /// and any dock padding without a second key on the group.
+  ///
+  /// Null when the panel is not currently hosted (or not laid out yet), in which
+  /// case a tear-off is skipped rather than guessed at.
+  Rect? paneRect(String id, {required double headerHeight}) {
+    // A group renders only its ACTIVE panel's content, so a tab that is not the
+    // active one has no render box of its own. Every tab of a group shares the
+    // group's single body slot, so measuring the active sibling gives exactly the
+    // rect the dragged tab would occupy — which is what a tear-off needs.
+    final String measured = _mountedSiblingOf(id) ?? id;
+    final BuildContext? context = contentKeyOf(measured).currentContext;
+    if (context == null) return null;
+    final RenderObject? renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return null;
+    final Size size = renderObject.size;
+    if (size.isEmpty) return null;
+    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
+    return Rect.fromLTWH(
+      topLeft.dx,
+      topLeft.dy - headerHeight,
+      size.width,
+      size.height + headerHeight,
+    );
+  }
+
+  /// The panel of [id]'s group whose content is actually mounted, when [id]'s
+  /// own content is not (i.e. [id] is not its group's active tab).
+  String? _mountedSiblingOf(String id) {
+    if (contentKeyOf(id).currentContext != null) return null;
+    final ({DockSide side, int gi})? loc = _locOf(id);
+    if (loc == null) return null;
+    final String? active = activeInGroup(loc.side, loc.gi);
+    return (active == null || active == id) ? null : active;
+  }
+
+  /// The workspace's own bounds in the main view's logical coordinates, as last
+  /// reported by the dock. Null until the dock has laid out.
+  Rect? get dockRect => _dockRect;
+  Rect? _dockRect;
+
+  /// Backend/UI hook: the dock reports its bounds so a tab drag can tell "still
+  /// over the workspace" (a dock drag) from "taken out of the workspace" (a
+  /// tear-off).
+  void reportDockRect(Rect rect) {
+    if (_dockRect == rect) return;
+    _dockRect = rect;
+  }
+
   /// Called by the UI when a tab drag begins, with the tab's origin group and id.
   void beginDrag({DockSide? side, int? group, String? panelId}) {
     _isDragging = true;
     _dragSide = side;
     _dragGroup = group ?? -1;
     _dragPanelId = panelId;
-    if (!_escHandlerRegistered) {
-      HardwareKeyboard.instance.addHandler(_onHardwareKey);
-      _escHandlerRegistered = true;
-    }
+    _updateEscHandler();
     notifyListeners();
+  }
+
+  /// Whether a tab drag turns its pane into a window at all — either at the
+  /// [PanelDockConfig.popOutDistance] threshold, or immediately (see
+  /// [tearOffAtDragStart]) — instead of waiting for a release outside the
+  /// window.
+  bool get tearOffOnDrag => config.tearOffEnabled && supportsDetach;
+
+  /// Whether a tab drag must tear its pane off at the drag's **own start**,
+  /// without waiting for [PanelDockConfig.popOutDistance] or for the pointer to
+  /// leave the dock ([PanelDockConfig.tearOffOnDragStart]).
+  bool get tearOffAtDragStart => tearOffOnDrag && config.tearOffOnDragStart;
+
+  /// Whether dragging [id]'s tab may tear it off right now.
+  bool canTearOff(String id) =>
+      tearOffOnDrag && (_descriptors[id]?.detachable ?? true);
+
+  /// The panel currently being torn off, if any.
+  String? get tearOffId => _tearOffId;
+
+  /// Whether [id] is the panel currently being torn off.
+  bool isTornOff(String id) => _tearOffId != null && _tearOffId == id;
+
+  /// Tears [id] out of the dock into a floating window **at the pane's own
+  /// rect**, for the drag-threshold gesture.
+  ///
+  /// [paneRect] is the docked pane's rect (tab strip + body) in the main
+  /// view's logical coordinates; [headerHeight] is the chrome the floating
+  /// window adds above the content, so the content keeps exactly the height it
+  /// had docked. [pointerInPane] is where the cursor was inside [paneRect] at
+  /// the moment of the tear-off, so the window tracks the cursor with the
+  /// grabbed point pinned.
+  ///
+  /// The in-flight Flutter tab drag is cancelled here (the pointer is routed a
+  /// [PointerCancelEvent]) — the window that owns the gesture may never see the
+  /// release, so the backend tracks the cursor from now on and finishes with
+  /// [endExternalDrag].
+  void beginTearOff(
+    String id, {
+    required Rect paneRect,
+    required double headerHeight,
+    required Offset pointerInPane,
+  }) {
+    if (_tearOffId != null) return;
+    if (!canTearOff(id)) return;
+    final DockSide origin = _locOf(id)?.side ?? DockSide.right;
+    _tearOffId = id;
+    _removeFromDock(id);
+    _floatingOrigin[id] = origin;
+    // Hand the gesture to the backend: cancel the Flutter drag first, so its
+    // `onDraggableCanceled` can't also detach the panel (consumeDragCancel).
+    _dragCancelRequested = true;
+    _updateEscHandler();
+    final int? pointer = _dragPointerId;
+    if (pointer != null) {
+      GestureBinding.instance.pointerRouter
+          .route(PointerCancelEvent(pointer: pointer));
+    }
+    _externalDragging = true;
+    notifyListeners();
+    _windowing.openTearOff(
+      _descriptors[id]!,
+      origin: origin,
+      paneRect: paneRect,
+      headerHeight: headerHeight,
+      pointerInPane: pointerInPane,
+    );
   }
 
   /// Called by the UI when a tab drag ends.
@@ -110,10 +247,6 @@ class PanelManager extends ChangeNotifier {
   /// dispose the source Draggable before `onDragEnd` fires, which would
   /// otherwise leave the backend's cursor tracker running forever.
   void endDrag() {
-    if (_escHandlerRegistered) {
-      HardwareKeyboard.instance.removeHandler(_onHardwareKey);
-      _escHandlerRegistered = false;
-    }
     hideDragImage();
     if (!_isDragging) return;
     _isDragging = false;
@@ -121,7 +254,21 @@ class PanelManager extends ChangeNotifier {
     _dragGroup = -1;
     _dragPanelId = null;
     _dragPointerId = null;
+    _updateEscHandler();
     notifyListeners();
+  }
+
+  /// Registers/removes the ESC handler according to whether *any* drag (a tab
+  /// drag or a tear-off) is in flight.
+  void _updateEscHandler() {
+    final bool want = _isDragging || _tearOffId != null;
+    if (want == _escHandlerRegistered) return;
+    if (want) {
+      HardwareKeyboard.instance.addHandler(_onHardwareKey);
+    } else {
+      HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    }
+    _escHandlerRegistered = want;
   }
 
   // ---- Drag cancellation --------------------------------------------------
@@ -145,16 +292,28 @@ class PanelManager extends ChangeNotifier {
   bool _onHardwareKey(KeyEvent event) {
     if (event is KeyDownEvent &&
         event.logicalKey == LogicalKeyboardKey.escape &&
-        _isDragging) {
+        (_isDragging || _tearOffId != null)) {
       cancelDrag();
       return true;
     }
     return false;
   }
 
-  /// Cancels the in-flight drag (ESC / right-click): the panel returns to its
-  /// original location — no detach, no move.
+  /// Cancels the in-flight drag or tear-off (ESC / right-click): the panel
+  /// returns to its original location — no detach, no move.
+  ///
+  /// A tear-off is already a window, so cancelling it means re-docking the
+  /// panel (which destroys the window and stops the backend's tracker); a tab
+  /// drag is cancelled by routing a synthetic [PointerCancelEvent] through the
+  /// binding's pointer router, which makes the Draggable's avatar finish as a
+  /// cancel (and run `onDraggableCanceled`, which then checks
+  /// [consumeDragCancel] so it doesn't tear the panel off).
   void cancelDrag() {
+    final String? torn = _tearOffId;
+    if (torn != null) {
+      redock(torn);
+      return;
+    }
     if (!_isDragging) return;
     _dragCancelRequested = true;
     final int? pointer = _dragPointerId;
@@ -188,6 +347,28 @@ class PanelManager extends ChangeNotifier {
 
   /// The descriptor registered for [id].
   PanelDescriptor descriptor(String id) => _descriptors[id]!;
+
+  /// The [GlobalKey] wrapping [id]'s content subtree — see
+  /// [PanelDescriptor.contentKey]. Stable for the manager's lifetime.
+  GlobalKey contentKeyOf(String id) {
+    final GlobalKey? declared = _descriptors[id]?.contentKey;
+    if (declared != null) return declared;
+    return _contentKeys[id] ??=
+        GlobalKey(debugLabel: 'panel-content-$id');
+  }
+
+  /// Builds [id]'s content, wrapped in its stable [GlobalKey].
+  ///
+  /// **Both** hosts must render panels through this — the docked group and the
+  /// detached window — so the element moves instead of being rebuilt when a
+  /// panel is torn off or re-docked. That is what preserves the content's
+  /// [State]: scroll offsets, controllers, text fields, running animations.
+  Widget contentOf(String id, BuildContext context) {
+    return KeyedSubtree(
+      key: contentKeyOf(id),
+      child: _descriptors[id]!.builder(context),
+    );
+  }
 
   // ---- Region / group queries ---------------------------------------------
 
@@ -458,7 +639,12 @@ class PanelManager extends ChangeNotifier {
 
   /// Snaps a floating panel back into the dock as a new group on [toSide]
   /// (defaults to its origin), so it lands beside whatever is already there.
+  ///
+  /// Also ends a tear-off on [id]: the window is destroyed, the backend's
+  /// cursor tracker notices and stops, and the content is reparented back into
+  /// the dock by its [GlobalKey].
   void redock(String id, {DockSide? toSide}) {
+    if (_tearOffId == id) _endTearOff();
     final DockSide? origin = _floatingOrigin.remove(id);
     if (origin == null) return;
     final DockSide target = toSide ?? origin;
@@ -535,27 +721,52 @@ class PanelManager extends ChangeNotifier {
   /// The dock the dragged window currently hovers over, if any.
   DockSide? get externalHoverSide => _externalHoverSide;
 
-  /// Backend hook: report the live [pointer] (top-left space) relative to the
-  /// main window rect [main] while a detached window is dragged.
+  /// Backend hook: report the live [pointer] relative to the main window rect
+  /// [main] while a detached window is dragged.
+  ///
+  /// Both are in the main view's **logical** pixels — the units this manager's
+  /// config and layout are written in (`leftDockSize`, `sizeOf(side)`, …). A
+  /// backend reading physical pixels from the OS must divide by the view's device
+  /// pixel ratio first, or the zones below are wrong on any scaled display.
   void updateExternalDragHover(Offset pointer, Rect main) {
     _externalDragging = true;
     final DockSide? side = _zoneForPanelOverMain(pointer, main);
     if (side == _externalHoverSide) return; // avoid rebuild storms at 60fps
     _externalHoverSide = side;
+    // Over a zone the pane goes translucent, so the landing rect stays readable
+    // *through* the pane being dragged (Resolve previews the exact extent the
+    // clip will occupy; a tear-off must not hide the preview it is aiming at).
+    final String? torn = _tearOffId;
+    if (torn != null) _windowing.setTearOffDim(torn, side != null);
     notifyListeners();
   }
 
+  /// Ends the in-flight tear-off: clears the hover preview and puts the
+  /// window's opacity back (it is either about to be destroyed or to stay
+  /// floating, and a floating pane is never dimmed).
+  void _endTearOff() {
+    final String? id = _tearOffId;
+    _tearOffId = null;
+    _externalDragging = false;
+    _externalHoverSide = null;
+    if (id != null) _windowing.setTearOffDim(id, false);
+    _updateEscHandler();
+  }
+
   /// Backend hook: the drag ended. If [commitId] is over a dock zone, it
-  /// re-docks there; otherwise the drag indicator is just cleared.
+  /// re-docks there; otherwise the drag indicator is just cleared and the
+  /// panel stays floating where it was released.
   void endExternalDrag({String? commitId}) {
     final DockSide? side = _externalHoverSide;
     _externalDragging = false;
     _externalHoverSide = null;
     if (commitId != null && side != null && _floatingOrigin.containsKey(commitId)) {
+      // Clears the tear-off state itself.
       redock(commitId, toSide: side);
-    } else {
-      notifyListeners();
+      return;
     }
+    if (commitId != null && commitId == _tearOffId) _endTearOff();
+    notifyListeners();
   }
 
   /// Maps the live pointer onto a dock zone of the main window, using the
@@ -732,6 +943,7 @@ class PanelManager extends ChangeNotifier {
       HardwareKeyboard.instance.removeHandler(_onHardwareKey);
       _escHandlerRegistered = false;
     }
+    _tearOffId = null;
     _saveTimer?.cancel();
     if (config.storage != null) {
       config.storage?.write(saveLayout());

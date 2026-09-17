@@ -42,6 +42,7 @@ class PanelDescriptor {
     this.icon,
     this.detachedSize,
     this.detachable = true,
+    this.contentKey,
   });
 
   /// Stable, unique identifier used by the manager to track placement.
@@ -63,4 +64,19 @@ class PanelDescriptor {
   /// Whether this panel may be detached into its own floating window. When
   /// false, the detach button and tab drag-tear-off are suppressed.
   final bool detachable;
+
+  /// Optional [GlobalKey] for the panel's *content* subtree.
+  ///
+  /// The dock and the detached window both render the panel through
+  /// [PanelManager.contentOf], which wraps [builder] in a `KeyedSubtree` with
+  /// this key. Because a `GlobalKey` is unique app-wide (and detached windows
+  /// are sibling views of the same `BuildOwner`), tearing a panel off moves the
+  /// *existing element* into the new window instead of rebuilding it — so
+  /// scroll offsets, `TabController`s, text fields and running animations
+  /// survive the move, exactly as if the pane had been carried by hand.
+  ///
+  /// A [GlobalKey] cannot be a `const` default, so leaving this null is the
+  /// normal case: [PanelManager.registerPanel] mints and remembers one per id.
+  /// Supply your own only if something else needs to find the content subtree.
+  final GlobalKey? contentKey;
 }

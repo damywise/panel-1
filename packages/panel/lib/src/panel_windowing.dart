@@ -67,6 +67,52 @@ abstract class PanelWindowingBackend {
   /// dock the panel came from (so it can snap back there by default).
   void open(PanelDescriptor descriptor, {required DockSide origin});
 
+  /// Opens an external surface for [descriptor] **at the pane's own rect**, for
+  /// the immediate (drag-out) tear-off.
+  ///
+  /// This is the libnativeapi gesture: once the drag has passed
+  /// [PanelDockConfig.popOutDistance] and the pointer has left the dock, the
+  /// docked pane stops being docked and starts being a window — no ghost, no
+  /// small pill, the pane itself — and follows the cursor with the grabbed point
+  /// pinned under it until release.
+  ///
+  /// Geometry is in the main window's **logical** view coordinates:
+  ///
+  /// * [paneRect] — the docked pane's rect (tab strip **and** body). Its size
+  ///   is what the new surface should be, so the content does not reflow.
+  /// * [headerHeight] — the chrome the surface adds *above* the content (title
+  ///   strip). The surface should render a header exactly this tall and size
+  ///   itself to `paneRect.size`, which leaves the content the same height it
+  ///   had docked (`paneRect.height - headerHeight`).
+  /// * [pointerInPane] — where the cursor was inside [paneRect] when the pointer
+  ///   went **down** (not where it crossed the threshold), so the surface can
+  ///   anchor the grabbed point under the cursor and travel exactly as far as the
+  ///   pointer did from the press.
+  ///
+  /// The backend owns the gesture from here on: the window that received the
+  /// press may never see the release, so it must track the global cursor and
+  /// finish by calling [PanelManager.endExternalDrag] (which re-docks over a
+  /// zone, or leaves the panel floating) and, for a cancel, stopping its own
+  /// tracker. The default implementation ignores the geometry and calls
+  /// [open], so backends that only support release-to-detach keep working.
+  void openTearOff(
+    PanelDescriptor descriptor, {
+    required DockSide origin,
+    required Rect paneRect,
+    required double headerHeight,
+    required Offset pointerInPane,
+  }) {
+    open(descriptor, origin: origin);
+  }
+
+  /// Dims (or un-dims) the surface hosting [id] while it hovers over a dock
+  /// zone, so the main window's "it lands *here*" preview stays visible
+  /// underneath the surface the user is dragging.
+  ///
+  /// Called by [PanelManager] every time the hovered zone of an in-flight
+  /// tear-off changes (never for a plain window move). Default: no-op.
+  void setTearOffDim(String id, bool dimmed) {}
+
   /// Destroys the external surface for panel [id] (called on re-dock/close).
   void close(String id);
 

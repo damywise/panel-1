@@ -247,6 +247,9 @@ class PanelDockConfig {
     this.splitterHitSize = 8,
     this.splitterGap,
     this.dropEdgeFraction = 0.30,
+    this.popOutDistance = 8.0,
+    this.tearOffEnabled = true,
+    this.tearOffOnDragStart = false,
     this.defaultDetachedSize = const Size(480, 600),
     this.detachedConstraints = const BoxConstraints(minWidth: 240, minHeight: 200),
     this.redockAsTab = false,
@@ -263,6 +266,7 @@ class PanelDockConfig {
     this.tabBuilder,
     this.storage,
   })  : assert(dropEdgeFraction > 0 && dropEdgeFraction < 0.5),
+        assert(popOutDistance >= 0),
         assert(minGroupFraction > 0 && minGroupFraction < 0.5);
 
   /// Initial widths/height of the side docks, in logical pixels.
@@ -306,6 +310,66 @@ class PanelDockConfig {
   /// Fraction of a group's edge that triggers a "new group" split on drop
   /// (the remaining center triggers "add as tab"). Range (0, 0.5).
   final double dropEdgeFraction;
+
+  /// How far (logical px) a tab must be dragged before a tear-off is even
+  /// considered.
+  ///
+  /// This is the *click guard*: below it a tab drag is a plain drag — click,
+  /// reorder, drop on a target — so a click never pops a window out and nothing
+  /// flickers. It is not the whole condition: the pane only leaves the workspace
+  /// once the pointer also leaves the dock's bounds (see [tearOffEnabled]), which
+  /// is what keeps every in-dock drop target reachable.
+  ///
+  /// 8 px matches the libnativeapi reference's `popOutDistance`.
+  final double popOutDistance;
+
+  /// Whether dragging a tab out of the workspace tears its panel off into a
+  /// floating window (libnativeapi / Chrome-tab behavior).
+  ///
+  /// Past [popOutDistance], and once the pointer leaves the dock's bounds, the
+  /// pane *becomes* a window: the backend is handed the pane's own rect
+  /// ([PanelWindowingBackend.openTearOff]) and its live content is reparented
+  /// into it, so it follows the cursor at its real size with its real state.
+  /// While the pointer is still over the dock, the drag stays an ordinary dock
+  /// drag — reorder, split, another group, another region — because every one of
+  /// those targets lives inside the dock and tearing off early would make them
+  /// all unreachable.
+  ///
+  /// When false (or when the backend cannot detach), the legacy behavior
+  /// applies: the drag shows a captured pill and the panel is detached on
+  /// release outside the window.
+  ///
+  /// Requires a backend whose [PanelWindowingBackend.supportsDetach] is true
+  /// and which implements
+  /// [PanelWindowingBackend.openTearOff]; the default implementation forwards
+  /// to [PanelWindowingBackend.open] with the panel's default size.
+  final bool tearOffEnabled;
+
+  /// Whether the pane tears off at the **drag's own start** — no threshold, no
+  /// need for the pointer to leave the dock.
+  ///
+  /// The window **is** the drag visual from the first pixel of movement: the tab
+  /// pill is never drawn (the tab's drag feedback is suppressed) and no dock
+  /// drop preview or reorder affordance is ever shown, because the pane is a
+  /// window before the next frame is built. Dropping that window back over the
+  /// dock still re-docks it by zone ([PanelManager.endExternalDrag]), but the
+  /// dock's finer targets — a specific gap between two tabs, a specific group —
+  /// are then reachable only through those zones, because the gesture is a window
+  /// drag from the start.
+  ///
+  /// [popOutDistance] stays in the path as a **retry** only: if the pane's rect
+  /// cannot be measured at the drag's start, the first update past that distance
+  /// tears it off instead of silently degrading into a dock drag.
+  ///
+  /// Trade-off, and the reason this is not the default: a mouse resolves a drag
+  /// after **1 px** of movement (`kPrecisePointerHitSlop`), so a *click* that
+  /// jitters is a drag too, and it will flash a window (which re-docks and
+  /// activates the tab on release). The thresholded variant
+  /// ([tearOffOnDragStart] `false`, the default) makes such a click behave like a
+  /// click, at the cost of showing the tab pill for those 8 px.
+  ///
+  /// Only consulted when [tearOffEnabled] is true.
+  final bool tearOffOnDragStart;
 
   /// Size used for a detached window when its [PanelDescriptor.detachedSize]
   /// is null.
@@ -375,6 +439,9 @@ class PanelDockConfig {
     double? splitterHitSize,
     double? splitterGap,
     double? dropEdgeFraction,
+    double? popOutDistance,
+    bool? tearOffEnabled,
+    bool? tearOffOnDragStart,
     Size? defaultDetachedSize,
     BoxConstraints? detachedConstraints,
     bool? redockAsTab,
@@ -404,6 +471,9 @@ class PanelDockConfig {
       splitterHitSize: splitterHitSize ?? this.splitterHitSize,
       splitterGap: splitterGap ?? this.splitterGap,
       dropEdgeFraction: dropEdgeFraction ?? this.dropEdgeFraction,
+      popOutDistance: popOutDistance ?? this.popOutDistance,
+      tearOffEnabled: tearOffEnabled ?? this.tearOffEnabled,
+      tearOffOnDragStart: tearOffOnDragStart ?? this.tearOffOnDragStart,
       defaultDetachedSize: defaultDetachedSize ?? this.defaultDetachedSize,
       detachedConstraints: detachedConstraints ?? this.detachedConstraints,
       redockAsTab: redockAsTab ?? this.redockAsTab,
