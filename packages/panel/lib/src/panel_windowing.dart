@@ -48,6 +48,27 @@ class PanelDragImage {
   final Offset anchorOffset;
 }
 
+/// Handle returned by [PanelWindowingBackend.openTearOff].
+///
+/// A backend that can open the torn-off window **before** the pane leaves the
+/// dock (so the pane never visibly disappears while the window spins up)
+/// returns a handle: the manager then marks the panel floating immediately but
+/// keeps it docked until the backend reports the window has rendered its first
+/// frame via [onReady]. A backend that cannot do that returns null and the
+/// manager falls back to removing the pane first, then opening the window.
+class TearOffHandle {
+  TearOffHandle();
+
+  /// The backend calls this once the new window has painted its first frame.
+  ///
+  /// The manager assigns it after [PanelWindowingBackend.openTearOff] returns
+  /// and responds by removing the pane from the dock — by then the window has
+  /// already built its own copy of the content while hidden, so the reveal
+  /// shows it painted rather than a placeholder. If the window is destroyed or
+  /// re-docked before this fires, the call is ignored.
+  VoidCallback? onReady;
+}
+
 /// Backend that hosts detached panels in external surfaces (OS windows).
 ///
 /// Implementations live in platform packages. The manager calls [open]/[close]
@@ -93,16 +114,22 @@ abstract class PanelWindowingBackend {
   /// press may never see the release, so it must track the global cursor and
   /// finish by calling [PanelManager.endExternalDrag] (which re-docks over a
   /// zone, or leaves the panel floating) and, for a cancel, stopping its own
-  /// tracker. The default implementation ignores the geometry and calls
-  /// [open], so backends that only support release-to-detach keep working.
-  void openTearOff(
+  /// tracker.
+  ///
+  /// Returns a [TearOffHandle] when the window was created while the pane is
+  /// still docked (the preferred visual: the pane stays put until the window
+  /// can show it). Returns null when no window was created — the manager then
+  /// removes the pane itself and calls [open] instead. The default
+  /// implementation returns null, so backends that only support
+  /// release-to-detach keep working unchanged.
+  TearOffHandle? openTearOff(
     PanelDescriptor descriptor, {
     required DockSide origin,
     required Rect paneRect,
     required double headerHeight,
     required Offset pointerInPane,
   }) {
-    open(descriptor, origin: origin);
+    return null;
   }
 
   /// Dims (or un-dims) the surface hosting [id] while it hovers over a dock

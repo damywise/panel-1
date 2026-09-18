@@ -157,18 +157,18 @@ class _DockArea extends StatelessWidget {
             final double bottomMax = (c.maxHeight - cfg.minCenterHeight).clamp(cfg.minDockExtent, c.maxHeight);
             final double bottomH = manager.sizeOf(DockSide.bottom).clamp(cfg.minDockExtent, bottomMax);
 
+            // The splitter slot stays in the tree even for a collapsed dock —
+            // it owns the visible `splitterGap` spacing, so skipping it would
+            // make the collapsed strip sit flush against the center. The
+            // collapsed variant is paint-only (no resize handle).
             final List<Widget> row = <Widget>[];
             if (manager.hasPanels(DockSide.left)) {
               row.add(_sideDock(DockSide.left, leftW));
-              if (!manager.isCollapsed(DockSide.left)) {
-                row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.left, manager.sizeOf(DockSide.left) + d)));
-              }
+              row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.left, manager.sizeOf(DockSide.left) + d), collapsed: manager.isCollapsed(DockSide.left)));
             }
             row.add(Expanded(child: _CenterArea(manager: manager, onDetach: onDetach)));
             if (manager.hasPanels(DockSide.right)) {
-              if (!manager.isCollapsed(DockSide.right)) {
-                row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.right, manager.sizeOf(DockSide.right) - d)));
-              }
+              row.add(_splitter(t, Axis.vertical, (double d) => manager.setSize(DockSide.right, manager.sizeOf(DockSide.right) - d), collapsed: manager.isCollapsed(DockSide.right)));
               row.add(_sideDock(DockSide.right, rightW));
             }
 
@@ -177,8 +177,7 @@ class _DockArea extends StatelessWidget {
               content = Column(
                 children: <Widget>[
                   Expanded(child: content),
-                  if (!manager.isCollapsed(DockSide.bottom))
-                    _splitter(t, Axis.horizontal, (double d) => manager.setSize(DockSide.bottom, manager.sizeOf(DockSide.bottom) - d)),
+                  _splitter(t, Axis.horizontal, (double d) => manager.setSize(DockSide.bottom, manager.sizeOf(DockSide.bottom) - d), collapsed: manager.isCollapsed(DockSide.bottom)),
                   _bottomDock(bottomH),
                 ],
               );
@@ -193,15 +192,23 @@ class _DockArea extends StatelessWidget {
     );
   }
 
-  Widget _splitter(PanelTheme t, Axis axis, ValueChanged<double> onDrag) => _Splitter(
-        axis: axis,
-        theme: t,
-        enabled: manager.config.allowResize,
-        hitSize: manager.config.splitterHitSize,
-        visualGap: manager.config.splitterGap,
-        duration: manager.config.splitterDuration,
-        onDrag: onDrag,
-      );
+  Widget _splitter(PanelTheme t, Axis axis, ValueChanged<double> onDrag, {bool collapsed = false}) {
+    final double? gap = manager.config.splitterGap;
+    if (collapsed) {
+      // Paint-only: the gap stays (plain background) but nothing is
+      // interactive — a collapsed dock has no size to resize.
+      return SizedBox(width: axis == Axis.vertical ? (gap ?? 1) : null, height: axis == Axis.horizontal ? (gap ?? 1) : null);
+    }
+    return _Splitter(
+      axis: axis,
+      theme: t,
+      enabled: manager.config.allowResize,
+      hitSize: manager.config.splitterHitSize,
+      visualGap: gap,
+      duration: manager.config.splitterDuration,
+      onDrag: onDrag,
+    );
+  }
 
   Widget _sideDock(DockSide side, double width) {
     if (manager.isCollapsed(side)) {
@@ -354,7 +361,11 @@ class PanelGroup extends StatelessWidget {
             onDetach: onDetach,
           ),
           if (t.tabDividerThickness > 0) Container(height: t.tabDividerThickness, color: t.border),
+          // The body slot carries the group's measurement key: paneRect sizes a
+          // torn-off window from it, whichever tab is dragged (all tabs share
+          // this one slot — only the active panel's content is mounted).
           Expanded(
+            key: manager.bodyKeyOf(side, groupIndex),
             child: active == null
                 ? const SizedBox.shrink()
                 : manager.contentOf(active.id, context),
@@ -1358,8 +1369,18 @@ class _NativeDropZoneOverlay extends StatelessWidget {
         builder: (BuildContext context, BoxConstraints c) {
           final double w = c.maxWidth;
           final double h = c.maxHeight;
+          // Mirrors `_zoneForPanelOverMain`: a collapsed dock only occupies its
+          // thin `collapsedExtent` strip, so the preview must not paint the
+          // fallback band over the neighboring region.
           double extent(DockSide side, double fallback, double maxFrac, double full) {
-            final double v = (manager.hasPanels(side) && !manager.isCollapsed(side)) ? manager.sizeOf(side) : fallback;
+            final double v;
+            if (!manager.hasPanels(side)) {
+              v = fallback;
+            } else if (manager.isCollapsed(side)) {
+              v = manager.config.collapsedExtent;
+            } else {
+              v = manager.sizeOf(side);
+            }
             return v.clamp(0.0, full * maxFrac);
           }
 
@@ -1375,7 +1396,68 @@ class _NativeDropZoneOverlay extends StatelessWidget {
           };
 
           final int groups = manager.groupCount(activeSide);
-          if (!manager.config.redockAsTab && groups >= 1) {
+          final int hoverGroup = manager.externalHoverGroup;
+          final int hoverSplit = manager.externalHoverSplit;
+          if (hoverGroup >= 0 && hoverGroup < groups) {
+            // Dropping onto a group's center merges the panel as a tab of that
+            // group: highlight the group's own slice of the side, weighted like
+            // the layout (left/right stack vertically, bottom/center
+            // side-by-side).
+            final bool rowAxis = activeSide == DockSide.bottom || activeSide == DockSide.center;
+            double total = 0;
+            for (int i = 0; i < groups; i++) {
+              total += manager.groupWeight(activeSide, i);
+            }
+            double acc = 0;
+            for (int i = 0; i < hoverGroup; i++) {
+              acc += manager.groupWeight(activeSide, i);
+            }
+            final double frac0 = total > 0 ? acc / total : 0;
+            final double frac1 =
+                total > 0 ? manager.groupWeight(activeSide, hoverGroup) / total : 0;
+            if (rowAxis) {
+              final double gx = target.left + target.width * frac0;
+              final double gw = target.width * frac1;
+              target = Rect.fromLTWH(gx, target.top, gw, target.height);
+            } else {
+              final double gy = target.top + target.height * frac0;
+              final double gh = target.height * frac1;
+              target = Rect.fromLTWH(target.left, gy, target.width, gh);
+            }
+          } else if (hoverSplit >= 0 && hoverSplit <= groups && groups >= 1) {
+            // Edge drop: a new group splits in *before* the group at
+            // `hoverSplit`. Paint the half of the adjacent group the new group
+            // will occupy — at the aimed position, not the region's end — the
+            // same half-slice the in-dock `_GroupDropZones` before/after
+            // preview paints.
+            final bool rowAxis = activeSide == DockSide.bottom || activeSide == DockSide.center;
+            double total = 0;
+            for (int i = 0; i < groups; i++) {
+              total += manager.groupWeight(activeSide, i);
+            }
+            // The boundary the new group inserts at: the cumulative weight of
+            // the groups before `hoverSplit`.
+            double acc = 0;
+            for (int i = 0; i < hoverSplit && i < groups; i++) {
+              acc += manager.groupWeight(activeSide, i);
+            }
+            final double frac0 = total > 0 ? acc / total : 0;
+            // Paint a half-group slice centred on that boundary so the preview
+            // reads as "split here" whether it's the top, middle, or end.
+            final double sliceFrac =
+                total > 0 ? (manager.groupWeight(activeSide, hoverSplit.clamp(0, groups - 1)) / total) * 0.5 : 0.5;
+            if (rowAxis) {
+              final double gw = target.width * sliceFrac;
+              final double gx = (target.left + target.width * frac0 - gw / 2)
+                  .clamp(target.left, target.right - gw);
+              target = Rect.fromLTWH(gx, target.top, gw, target.height);
+            } else {
+              final double gh = target.height * sliceFrac;
+              final double gy = (target.top + target.height * frac0 - gh / 2)
+                  .clamp(target.top, target.bottom - gh);
+              target = Rect.fromLTWH(target.left, gy, target.width, gh);
+            }
+          } else if (!manager.config.redockAsTab && groups >= 1) {
             final double frac = 1 / (groups + 1);
             final bool rowAxis = activeSide == DockSide.bottom || activeSide == DockSide.center;
             if (rowAxis) {

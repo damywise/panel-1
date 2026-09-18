@@ -1,11 +1,13 @@
 // The tear-off as the user performs it: press a tab, drag it out of the
-// workspace, and the pane is gone from the dock — its live content now hosted by
-// the backend's window, with the same `State` and the same scroll position.
+// workspace, and the pane is gone from the dock — its content now hosted by the
+// backend's window.
 //
 // The window itself is faked (a `Column` with a strip on top of
-// `PanelManager.contentOf`) because that is exactly the contract the platform
-// backend must honour: render the content through the manager's key, size the
-// surface to the rect it was handed.
+// `PanelManager.contentOf`) because that is the contract the platform backend
+// honours: build the panel's content, size the surface to the rect it was
+// handed. The panel's `State` does NOT survive the move — a real detached
+// window is a separate FlutterView, so there is no element to carry across;
+// each host builds its own.
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
@@ -32,8 +34,8 @@ void main() {
     );
   }
 
-  testWidgets('a tab dragged out of the workspace tears the pane off, keeping '
-      'its State and scroll offset', (WidgetTester tester) async {
+  testWidgets('a tab dragged out of the workspace tears the pane off',
+      (WidgetTester tester) async {
     tester.view.physicalSize = viewSize;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -94,11 +96,21 @@ void main() {
         reason: 'inside the dock the drag must stay droppable');
     expect(manager.isTornOff('captions'), isFalse);
 
-    // Off the dock entirely: the pane leaves the workspace.
+    // Off the dock entirely: the window is created while the pane is still
+    // docked (the window-first path), so the pane only leaves once the window
+    // reports its first frame.
     await gesture.moveTo(const Offset(1500, 500));
+    await tester.pump();
+
+    expect(backend.tearOffs, hasLength(1));
+    // Still docked: the window has not painted yet, so the pane has not moved.
+    expect(find.text('Captions'), findsOneWidget,
+        reason: 'the pane stays docked until the window is ready');
+
     // The app's window host renders the detached window in the same turn the
     // pane leaves the dock (`registry.register` inside `openTearOff`), so the
     // content key always has a host and never leaves the tree.
+    backend.markTearOffReady('captions');
     floating.value = true;
     await tester.pump();
 
@@ -115,12 +127,15 @@ void main() {
     expect(find.text('Captions'), findsNothing,
         reason: 'the pane left the dock for good');
 
+    // The pane's State does not survive the tear-off: the window's copy is a
+    // fresh element (a real detached window is a separate FlutterView, so no
+    // element could cross anyway). The probe's scroll offset resets.
     expect(
       identical(tester.state<_ProbeState>(find.byType(_Probe)), probe),
-      isTrue,
-      reason: 'the GlobalKey must move the existing element, not rebuild it',
+      isFalse,
+      reason: 'each host builds its own element — State does not cross views',
     );
-    expect(probe.controller.offset, 600);
+    expect(tester.state<_ProbeState>(find.byType(_Probe)).controller.offset, 0);
 
     await gesture.up();
     await tester.pumpAndSettle();
@@ -191,6 +206,7 @@ void main() {
     // reorder halves and the drag pill are all never painted. If the tear-off
     // regressed to a threshold gate, this would see nothing.
     await gesture.moveBy(const Offset(-2, 0));
+    backend.markTearOffReady('captions');
     floating.value = true;
     await tester.pump();
 
@@ -217,12 +233,14 @@ void main() {
     expect(manager.isDragging, isFalse,
         reason: 'the dock must not stay in drag mode after a tear-off');
 
+    // Same contract as the thresholded tear-off above: the window's copy is a
+    // fresh element, the pane's State does not survive.
     expect(
       identical(tester.state<_ProbeState>(find.byType(_Probe)), probe),
-      isTrue,
-      reason: 'the GlobalKey must move the existing element, not rebuild it',
+      isFalse,
+      reason: 'each host builds its own element — State does not cross views',
     );
-    expect(probe.controller.offset, 600);
+    expect(tester.state<_ProbeState>(find.byType(_Probe)).controller.offset, 0);
 
     // The tear-off cancels the Flutter drag: the release belongs to the backend
     // (which re-docks or leaves the panel floating), so it must not also detach.
@@ -284,6 +302,7 @@ void main() {
     await gesture.moveBy(const Offset(4, 0));
     await tester.pump();
     await gesture.moveTo(const Offset(1500, 500));
+    backend.markTearOffReady('inspector');
     floating.value = true;
     await tester.pump();
 
@@ -322,6 +341,7 @@ void main() {
       headerHeight: 39,
       pointerInPane: const Offset(5, 5),
     );
+    backend.markTearOffReady('preview');
     floating.value = true;
     await tester.pump();
 

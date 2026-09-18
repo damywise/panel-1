@@ -53,8 +53,21 @@ class RecordingBackend extends PanelWindowingBackend {
     openIds.add(descriptor.id);
   }
 
+  /// When true (the default), [openTearOff] reports the window-first path: a
+  /// [TearOffHandle] whose [TearOffHandle.onReady] the test fires via
+  /// [markTearOffReady]. When false, [openTearOff] returns null and the
+  /// manager falls back to removing the pane then calling [open].
+  bool windowFirstTearOff = true;
+
+  /// The readiness callbacks handed out by [openTearOff], keyed by panel id.
+  /// A test calls [markTearOffReady] to simulate the window's first frame.
+  final Map<String, VoidCallback> _readyCallbacks = <String, VoidCallback>{};
+
+  /// Simulates the torn-off window having painted its first frame.
+  void markTearOffReady(String id) => _readyCallbacks.remove(id)?.call();
+
   @override
-  void openTearOff(
+  TearOffHandle? openTearOff(
     PanelDescriptor descriptor, {
     required DockSide origin,
     required Rect paneRect,
@@ -71,6 +84,10 @@ class RecordingBackend extends PanelWindowingBackend {
     ));
     opened.add(descriptor.id);
     openIds.add(descriptor.id);
+    if (!windowFirstTearOff) return null;
+    final TearOffHandle handle = TearOffHandle();
+    _readyCallbacks[descriptor.id] = () => handle.onReady?.call();
+    return handle;
   }
 
   @override

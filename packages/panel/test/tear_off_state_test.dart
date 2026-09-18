@@ -6,6 +6,7 @@
 // receives the pane's own rect, and every exit path returns the manager to a
 // consistent (dock xor float) placement.
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:panel/panel.dart';
@@ -56,32 +57,20 @@ void main() {
     });
   });
 
-  group('content keys', () {
-    test('are stable per panel and reused by contentOf', () {
+  group('body keys', () {
+    test('are stable per group slot', () {
       final PanelManager manager = managerWith(backend: RecordingBackend());
-      expect(manager.contentKeyOf('captions'),
-          same(manager.contentKeyOf('captions')));
-      expect(manager.contentKeyOf('captions'),
-          isNot(same(manager.contentKeyOf('timeline'))));
-    });
-
-    test('honour a key declared on the descriptor', () {
-      final PanelManager manager = PanelManager(
-        windowing: RecordingBackend(),
-      );
-      final GlobalKey declared = GlobalKey();
-      manager.registerPanel(PanelDescriptor(
-        id: 'p',
-        title: 'P',
-        contentKey: declared,
-        builder: (_) => const SizedBox.shrink(),
-      ));
-      expect(manager.contentKeyOf('p'), same(declared));
+      expect(manager.bodyKeyOf(DockSide.right, 0),
+          same(manager.bodyKeyOf(DockSide.right, 0)));
+      expect(manager.bodyKeyOf(DockSide.right, 0),
+          isNot(same(manager.bodyKeyOf(DockSide.left, 0))));
+      expect(manager.bodyKeyOf(DockSide.right, 0),
+          isNot(same(manager.bodyKeyOf(DockSide.right, 1))));
     });
   });
 
   group('beginTearOff', () {
-    test('moves the panel out of the dock and hands the backend the pane rect',
+    test('keeps the pane docked until the window is ready, then removes it',
         () {
       final RecordingBackend backend = RecordingBackend();
       final PanelManager manager = managerWith(backend: backend);
@@ -93,14 +82,16 @@ void main() {
         pointerInPane: const Offset(20, 12),
       );
 
+      // The window exists (the backend got the pane's rect) and the panel is
+      // already floating, but the pane is still docked — it only leaves once
+      // the window reports its first frame.
       expect(manager.isTornOff('captions'), isTrue);
       expect(manager.tearOffId, 'captions');
       expect(manager.isFloating('captions'), isTrue);
       expect(manager.isDragging, isFalse);
-      // Left its group entirely, so nothing paints it in the dock.
       expect(
         manager.panelsIn(DockSide.right).map((PanelDescriptor d) => d.id),
-        isNot(contains('captions')),
+        contains('captions'),
       );
       expect(backend.tearOffs, hasLength(1));
       final TearOffCall call = backend.tearOffs.single;
@@ -109,9 +100,48 @@ void main() {
       expect(call.paneRect, pane);
       expect(call.headerHeight, header);
       expect(call.pointerInPane, const Offset(20, 12));
-      // The hover preview is live from the first frame: the pane is being
-      // dragged, even though Flutter's own drag was cancelled.
       expect(manager.isExternalDragging, isTrue);
+
+      // First frame painted: the pane leaves the dock now, in the same turn.
+      backend.markTearOffReady('captions');
+      expect(
+        manager.panelsIn(DockSide.right).map((PanelDescriptor d) => d.id),
+        isNot(contains('captions')),
+      );
+      expect(manager.isFloating('captions'), isTrue);
+    });
+
+    test('falls back to remove-then-open when the backend cannot warm up', () {
+      final RecordingBackend backend = RecordingBackend()
+        ..windowFirstTearOff = false;
+      final PanelManager manager = managerWith(backend: backend);
+
+      manager.beginTearOff('captions',
+          paneRect: pane, headerHeight: header, pointerInPane: Offset.zero);
+
+      // The pane left immediately and the legacy open() path ran.
+      expect(manager.isFloating('captions'), isTrue);
+      expect(
+        manager.panelsIn(DockSide.right).map((PanelDescriptor d) => d.id),
+        isNot(contains('captions')),
+      );
+      expect(backend.opened, contains('captions'));
+    });
+
+    test('detaches anyway if the window never reports a first frame', () {
+      fakeAsync((FakeAsync async) {
+        final RecordingBackend backend = RecordingBackend();
+        final PanelManager manager = managerWith(backend: backend);
+        manager.beginTearOff('captions',
+            paneRect: pane, headerHeight: header, pointerInPane: Offset.zero);
+
+        expect(manager.panelsIn(DockSide.right), hasLength(1));
+        async.elapse(const Duration(milliseconds: 700));
+        expect(
+          manager.panelsIn(DockSide.right).map((PanelDescriptor d) => d.id),
+          isNot(contains('captions')),
+        );
+      });
     });
 
     test('is a no-op for a second panel while one is in flight', () {
@@ -216,6 +246,77 @@ void main() {
       expect(manager.externalHoverSide, isNull);
       expect(
         manager.panelsIn(DockSide.left).map((PanelDescriptor d) => d.id),
+        <String>['captions'],
+      );
+    });
+
+    test('a collapsed dock only claims its thin strip, not the fallback band', () {
+      // Regression: the zone test used the *fallback* extent for a collapsed
+      // dock (h*0.22 for bottom), so the lower ~22% of the window resolved to
+      // `bottom` even though the collapsed dock is only a thin strip and the
+      // rest of that band is still center content — an "upper" region lighting
+      // the "lower" dock.
+      final RecordingBackend backend = RecordingBackend();
+      final PanelManager manager = managerWith(backend: backend);
+      manager.beginTearOff('captions',
+          paneRect: pane, headerHeight: header, pointerInPane: Offset.zero);
+      manager.toggleCollapsed(DockSide.bottom); // collapse the timeline strip
+      const Rect main = Rect.fromLTWH(0, 0, 1000, 800);
+
+      // Well inside the collapsed dock's dead band (below the old 0.78h line,
+      // above the real 36px strip): must be center, not bottom.
+      manager.updateExternalDragHover(const Offset(500, 700), main);
+      expect(manager.externalHoverSide, DockSide.center);
+
+      // The thin strip itself still resolves to bottom.
+      manager.updateExternalDragHover(const Offset(500, 790), main);
+      expect(manager.externalHoverSide, DockSide.bottom);
+      manager.endExternalDrag();
+    });
+
+    test('an edge drop splits at the aimed group, not the region end', () {
+      // Regression: edge probes used to collapse to "new group at end", so a
+      // drop near the *top* of a left dock painted + committed a split at the
+      // bottom. Now the split lands where the cursor is.
+      final RecordingBackend backend = RecordingBackend();
+      final PanelManager manager = managerWith(backend: backend);
+      // Two stacked groups in the left dock.
+      manager.registerPanel(
+        const PanelDescriptor(
+          id: 'explorer',
+          title: 'Explorer',
+          builder: _nothing,
+        ),
+        side: DockSide.left,
+      );
+      manager.registerPanel(
+        const PanelDescriptor(
+          id: 'search',
+          title: 'Search',
+          builder: _nothing,
+        ),
+        side: DockSide.left,
+      );
+      manager.splitActiveGroup(DockSide.left, 0); // search splits below explorer
+      expect(manager.groupCount(DockSide.left), 2);
+
+      manager.beginTearOff('captions',
+          paneRect: pane, headerHeight: header, pointerInPane: Offset.zero);
+      const Rect main = Rect.fromLTWH(0, 0, 1000, 800);
+
+      // Probe the TOP edge of the first (top) group in the left dock: should
+      // resolve to a split at index 0 (a new group above explorer), not a tab
+      // and not an append at the end.
+      manager.updateExternalDragHover(const Offset(40, 8), main);
+      expect(manager.externalHoverSide, DockSide.left);
+      expect(manager.externalHoverGroup, -1);
+      expect(manager.externalHoverSplit, 0);
+
+      manager.endExternalDrag(commitId: 'captions');
+      // The new group was inserted at the top, before explorer.
+      expect(manager.groupCount(DockSide.left), 3);
+      expect(
+        manager.panelsInGroup(DockSide.left, 0).map((d) => d.id),
         <String>['captions'],
       );
     });
