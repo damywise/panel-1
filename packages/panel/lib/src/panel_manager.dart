@@ -42,6 +42,19 @@ class _Region {
   double size;
 }
 
+/// Where a floating panel came from, so a cancel can restore it exactly.
+///
+/// [side] is always known. [gi]/[tab] are the group index and tab position the
+/// panel occupied when it left; -1 means "not known" (the panel was already
+/// floating, or its group couldn't be located), in which case a cancel falls
+/// back to the generic landing path.
+class _Origin {
+  const _Origin({required this.side, this.gi = -1, this.tab = -1});
+  final DockSide side;
+  final int gi;
+  final int tab;
+}
+
 /// Owns all panel placement and drives the UI via [ChangeNotifier].
 ///
 /// Construct one, [registerPanel] your panels, expose it via [PanelScope], and
@@ -72,7 +85,10 @@ class PanelManager extends ChangeNotifier {
   final Map<String, PanelDescriptor> _descriptors = <String, PanelDescriptor>{};
   late final Map<DockSide, _Region> _regions;
   // id -> the dock it should snap back to. Generic (no platform types).
-  final Map<String, DockSide> _floatingOrigin = <String, DockSide>{};
+  // Records the original group index and tab position too, so an ESC/
+  // right-click cancel can put the panel back exactly where it was instead of
+  // appending a new group at the region's end.
+  final Map<String, _Origin> _floatingOrigin = <String, _Origin>{};
 
   /// Mints (and remembers) the [GlobalKey] on each group's body slot — the
   /// `Expanded` under the tab strip that hosts the active panel's content.
@@ -259,7 +275,7 @@ class PanelManager extends ChangeNotifier {
       rethrow;
     }
     if (handle != null) {
-      _floatingOrigin[id] = origin;
+      _floatingOrigin[id] = _originOf(id, fallback: origin);
       _tearOffDetachTimer = Timer(_tearOffDetachTimeout, () {
         // The window never reported a first frame: detach anyway — a flash of
         // empty dock is better than a pane that can never leave.
@@ -271,8 +287,8 @@ class PanelManager extends ChangeNotifier {
       // backend could not host it). Remove the pane now and open the window in
       // the old order — the pane is gone for the window-creation window.
       _tearOffPendingDetach = false;
+      _floatingOrigin[id] = _originOf(id, fallback: origin);
       _removeFromDock(id);
-      _floatingOrigin[id] = origin;
       _windowing.open(_descriptors[id]!, origin: origin);
     }
 
@@ -692,8 +708,8 @@ class PanelManager extends ChangeNotifier {
     if (_floatingOrigin.containsKey(id)) return;
     if (!(_descriptors[id]?.detachable ?? true)) return;
     final DockSide origin = _locOf(id)?.side ?? DockSide.right;
+    _floatingOrigin[id] = _originOf(id, fallback: origin);
     _removeFromDock(id);
-    _floatingOrigin[id] = origin;
     notifyListeners();
     _windowing.open(_descriptors[id]!, origin: origin);
   }
@@ -715,9 +731,11 @@ class PanelManager extends ChangeNotifier {
     // first frame): ending it detaches the pane, so the pane is guaranteed to
     // be out of the dock before it is re-added below.
     if (_tearOffId == id) _endTearOff();
-    final DockSide? origin = _floatingOrigin.remove(id);
+    final _Origin? origin = _floatingOrigin.remove(id);
     if (origin == null) return;
-    final DockSide target = toSide ?? origin;
+    final bool hasExplicitTarget =
+        toSide != null || toGroup >= 0 || toSplit >= 0;
+    final DockSide target = toSide ?? origin.side;
     final _Region r = _regions[target]!;
     final bool merge =
         toGroup >= 0 && toGroup < r.groups.length;
@@ -735,6 +753,10 @@ class PanelManager extends ChangeNotifier {
         ..activeId = id;
       r.groups.insert(toSplit, g);
       r.activeGroup = toSplit;
+    } else if (!hasExplicitTarget && _restoreToOrigin(id, origin)) {
+      // A plain cancel (ESC / right-click / drop-to-return): put the panel
+      // back in the group and tab slot it came from. `_restoreToOrigin` did
+      // the insert and set the active group; nothing left to do here.
     } else if (config.redockAsTab && r.groups.isNotEmpty) {
       final _Group g = r.groups.last;
       g.panelIds.add(id);
@@ -876,15 +898,19 @@ class PanelManager extends ChangeNotifier {
   /// no more first frame to wait for.
   void _endTearOff() {
     final String? id = _tearOffId;
-    _tearOffId = null;
     _externalDragging = false;
     _externalHoverSide = null;
     _externalHoverGroup = -1;
     _externalHoverSplit = -1;
     if (id != null) {
       _windowing.setTearOffDim(id, false);
+      // Detach BEFORE clearing `_tearOffId`: `_detachTornOffPane` verifies the
+      // pane it's removing is the in-flight tear-off, so it must still see the
+      // id set. Clearing it first made the guard bail and left the pane docked
+      // — a cancel then re-added the panel on top of its still-docked copy.
       if (_tearOffPendingDetach) _detachTornOffPane(id);
     }
+    _tearOffId = null;
     _updateEscHandler();
   }
 
@@ -1181,6 +1207,39 @@ class PanelManager extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// Captures [id]'s current dock location for [_floatingOrigin] — the group
+  /// index and tab position — so a later cancel can restore it exactly. When
+  /// [id] isn't docked (already floating, or a window-first tear-off whose
+  /// pane is mid-flight), falls back to just the side.
+  _Origin _originOf(String id, {required DockSide fallback}) {
+    final ({DockSide side, int gi})? loc = _locOf(id);
+    if (loc == null) return _Origin(side: fallback);
+    final _Group g = _regions[loc.side]!.groups[loc.gi];
+    return _Origin(
+      side: loc.side,
+      gi: loc.gi,
+      tab: g.panelIds.indexOf(id),
+    );
+  }
+
+  /// Re-inserts [id] at its recorded [origin] — the same group and tab slot it
+  /// was torn out of. Returns false when the layout moved on (the original
+  /// group is gone or the side changed), so the caller falls back to the
+  /// generic landing path.
+  bool _restoreToOrigin(String id, _Origin origin) {
+    final _Region r = _regions[origin.side]!;
+    // The original group index is only meaningful while the region still has
+    // that group. A group index that drifted (other panels moved) is fine — we
+    // clamp — but a region that lost the group entirely can't restore to it.
+    if (origin.gi < 0 || origin.gi >= r.groups.length) return false;
+    final _Group g = r.groups[origin.gi];
+    final int tab = origin.tab.clamp(0, g.panelIds.length);
+    g.panelIds.insert(tab, id);
+    g.activeId = id;
+    r.activeGroup = origin.gi;
+    return true;
   }
 
   /// Removes [id] from its dock group (if any), pruning the group when it

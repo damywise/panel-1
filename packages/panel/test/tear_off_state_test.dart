@@ -369,6 +369,40 @@ void main() {
         contains('captions'),
       );
     });
+
+    test('returns the panel to its original group and tab slot', () {
+      // Regression: cancel used to call the generic landing path, appending a
+      // NEW group at the region's end (the bottom of a left/right dock)
+      // instead of restoring the panel into the group it was torn out of.
+      final RecordingBackend backend = RecordingBackend();
+      final PanelManager manager = managerWith(backend: backend);
+      // Give 'captions' a tab-mate in the same right-dock group.
+      manager.registerPanel(
+        const PanelDescriptor(
+          id: 'inspector',
+          title: 'Inspector',
+          builder: _nothing,
+        ),
+        side: DockSide.right,
+      );
+      // captions + inspector are now tabs of one group; captions is active.
+      expect(manager.groupCount(DockSide.right), 1);
+
+      manager.beginTearOff('captions',
+          paneRect: pane, headerHeight: header, pointerInPane: Offset.zero);
+      const Rect main = Rect.fromLTWH(0, 0, 1000, 800);
+      manager.updateExternalDragHover(const Offset(40, 400), main);
+      manager.cancelDrag();
+
+      // Back in the SAME group as inspector (still one group, two tabs), not a
+      // new group appended at the end. captions was the first tab originally,
+      // so restoring it to tab 0 puts it ahead of inspector again.
+      expect(manager.groupCount(DockSide.right), 1);
+      expect(
+        manager.panelsInGroup(DockSide.right, 0).map((d) => d.id),
+        <String>['captions', 'inspector'],
+      );
+    });
   });
 
   group('endDrag', () {
