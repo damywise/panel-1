@@ -258,6 +258,7 @@ class PanelDockConfig {
     this.allowCollapse = true,
     this.allowResize = true,
     this.enableNativeChrome = true,
+    this.persistFloating = false,
     this.hoverDuration = const Duration(milliseconds: 120),
     this.splitterDuration = const Duration(milliseconds: 100),
     this.strings = const PanelDockStrings(),
@@ -392,6 +393,16 @@ class PanelDockConfig {
   /// window drags for snap-back). Has no effect off macOS.
   final bool enableNativeChrome;
 
+  /// Whether [PanelManager.saveLayout] also records which panels are floating,
+  /// so a later [PanelManager.loadLayout] can re-open them as floating windows
+  /// (at the descriptor's default detached size — geometry is not persisted).
+  ///
+  /// Defaults to false: a restore re-docks every floating panel, the legacy
+  /// behavior. Opt in when re-opening torn-off windows matters (e.g. a
+  /// GPU-recovery restart should bring floating panels back as windows, not
+  /// silently dock them).
+  final bool persistFloating;
+
   /// Animation durations for hover/splitter feedback.
   final Duration hoverDuration;
   final Duration splitterDuration;
@@ -450,6 +461,7 @@ class PanelDockConfig {
     bool? allowCollapse,
     bool? allowResize,
     bool? enableNativeChrome,
+    bool? persistFloating,
     Duration? hoverDuration,
     Duration? splitterDuration,
     PanelDockStrings? strings,
@@ -482,6 +494,7 @@ class PanelDockConfig {
       allowCollapse: allowCollapse ?? this.allowCollapse,
       allowResize: allowResize ?? this.allowResize,
       enableNativeChrome: enableNativeChrome ?? this.enableNativeChrome,
+      persistFloating: persistFloating ?? this.persistFloating,
       hoverDuration: hoverDuration ?? this.hoverDuration,
       splitterDuration: splitterDuration ?? this.splitterDuration,
       strings: strings ?? this.strings,

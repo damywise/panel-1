@@ -40,6 +40,22 @@ class RecordingBackend extends PanelWindowingBackend {
   final List<String> closed = <String>[];
   final List<String> dims = <String>[];
 
+  /// Geometry this backend reports for [floatingGeometry] (what a real
+  /// backend would read off its hosted windows).
+  Map<String, Rect> geometry = <String, Rect>{};
+
+  /// The geometry maps passed to [restoreFloatingGeometry], in order.
+  final List<Map<String, Rect>> restoredGeometry = <Map<String, Rect>>[];
+
+  @override
+  Map<String, Rect> floatingGeometry() => geometry;
+
+  @override
+  void restoreFloatingGeometry(Map<String, Rect> geometry) {
+    calls.add('restoreFloatingGeometry:${geometry.keys.join(',')}');
+    restoredGeometry.add(geometry);
+  }
+
   /// Panels a test wants the backend to consider "open", newest last.
   final List<String> openIds = <String>[];
 
@@ -89,6 +105,10 @@ class RecordingBackend extends PanelWindowingBackend {
     _readyCallbacks[descriptor.id] = () => handle.onReady?.call();
     return handle;
   }
+
+  /// Index in [calls] of the last `open:<id>` for [id], or -1 — used to
+  /// assert [restoreFloatingGeometry] ran before the windows were opened.
+  int openIndexOf(String id) => calls.indexOf('open:$id');
 
   @override
   void close(String id) {

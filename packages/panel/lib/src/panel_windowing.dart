@@ -143,6 +143,31 @@ abstract class PanelWindowingBackend {
   /// Destroys the external surface for panel [id] (called on re-dock/close).
   void close(String id);
 
+  /// The current screen rect of every external surface this backend hosts,
+  /// keyed by panel id, so [PanelManager.saveLayout] can persist floating
+  /// window geometry alongside the docked layout.
+  ///
+  /// Rects are **frame** rects (what the OS reports for the window) in the
+  /// main view's **logical** pixels — the same coordinate space
+  /// [PanelManager.updateExternalDragHover] uses. A physical-pixel backend
+  /// divides by the view's device pixel ratio.
+  ///
+  /// Default: empty — backends that cannot report geometry simply persist
+  /// nothing, and the panels re-open at their default detached position.
+  Map<String, Rect> floatingGeometry() => const <String, Rect>{};
+
+  /// Supplies the floating-window geometry a previous session persisted
+  /// (via [floatingGeometry] and [PanelManager.saveLayout]), before
+  /// [PanelManager.loadLayout] re-opens the floating panels.
+  ///
+  /// A backend should stash the map and apply each entry when it later
+  /// creates a surface for that id — entries are one-shot: consume them on
+  /// apply so a later manual move is not overridden by a re-dock/tear-off
+  /// cycle.
+  ///
+  /// Default: no-op — restoring geometry is best-effort.
+  void restoreFloatingGeometry(Map<String, Rect> geometry) {}
+
   /// Minimizes the external surface for [id], if the platform supports it.
   void minimize(String id) {}
 

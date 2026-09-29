@@ -1108,10 +1108,29 @@ class PanelManager extends ChangeNotifier {
   }
 
   /// Serializes the current docked layout to a JSON-encodable map. Floating
-  /// windows are not persisted (they re-dock on restore).
+  /// windows are not persisted by default (they re-dock on restore); with
+  /// [PanelDockConfig.persistFloating] a `'floating'` list of `{id, side}`
+  /// entries is added so [loadLayout] can re-open them as windows, plus a
+  /// `'floatingGeometry'` map of `id: [left, top, right, bottom]` (logical-px
+  /// frame rects) reported by [PanelWindowingBackend.floatingGeometry] so the
+  /// windows can re-open where they were.
   Map<String, Object?> saveLayout() {
     return <String, Object?>{
       'version': 1,
+      if (config.persistFloating)
+        'floatingGeometry': <String, Object?>{
+          for (final MapEntry<String, Rect> entry
+              in _windowing.floatingGeometry().entries)
+            if (_descriptors.containsKey(entry.key) &&
+                entry.value.isFinite &&
+                !entry.value.isEmpty)
+              entry.key: <Object?>[
+                entry.value.left,
+                entry.value.top,
+                entry.value.right,
+                entry.value.bottom,
+              ],
+        },
       'regions': <String, Object?>{
         for (final DockSide side in DockSide.values)
           side.name: <String, Object?>{
@@ -1124,12 +1143,26 @@ class PanelManager extends ChangeNotifier {
             ],
           },
       },
+      if (config.persistFloating)
+        'floating': <Object?>[
+          for (final String id in floatingIds)
+            if (_descriptors.containsKey(id))
+              <String, Object?>{'id': id, 'side': _floatingOrigin[id]!.side.name},
+        ],
     };
   }
 
   /// Restores a layout produced by [saveLayout]. Only currently-registered
   /// panels are placed; unknown ids are ignored and any registered panel not in
   /// [data] is appended to the center so nothing is lost.
+  ///
+  /// When [data] carries a `'floating'` list (written under
+  /// [PanelDockConfig.persistFloating]), each entry whose id is a registered
+  /// panel not already placed by the docked layout is re-opened as a floating
+  /// window after the docked placement, at the descriptor's default detached
+  /// size. The flag does not have to be set on this config — the data is
+  /// honored either way — but a layout saved without it has nothing to
+  /// restore.
   void loadLayout(Map<String, Object?> data) {
     final Object? regionsData = data['regions'];
     if (regionsData is! Map) return;
@@ -1168,6 +1201,53 @@ class PanelManager extends ChangeNotifier {
       }
     }
 
+    // Hand the backend any persisted floating-window geometry BEFORE
+    // re-opening the panels below, so a backend that wants the frames stashes
+    // them now and applies them when each window is created. Malformed
+    // entries (non-list, wrong length, non-finite) are skipped.
+    final Object? geometryData = data['floatingGeometry'];
+    if (geometryData is Map) {
+      final Map<String, Rect> geometry = <String, Rect>{};
+      for (final MapEntry<Object?, Object?> entry in geometryData.entries) {
+        final Object? id = entry.key;
+        final Object? rect = entry.value;
+        if (id is! String || rect is! List || rect.length != 4) continue;
+        final List<double> values = <double>[
+          for (final Object? v in rect)
+            if (v is num && v.isFinite) v.toDouble() else double.nan,
+        ];
+        if (values.any((double v) => v.isNaN)) continue;
+        final Rect frame =
+            Rect.fromLTRB(values[0], values[1], values[2], values[3]);
+        if (frame.isEmpty) continue;
+        geometry[id] = frame;
+      }
+      if (geometry.isNotEmpty) {
+        _windowing.restoreFloatingGeometry(geometry);
+      }
+    }
+
+    // Re-open panels the layout recorded as floating — after docked placement
+    // but before the orphan sweep, so `!isFloating(id)` keeps them out of the
+    // center fallback. Mirrors detach(): the side is only the origin hint
+    // (where a cancel re-docks), not geometry.
+    final Object? floatingData = data['floating'];
+    final List<String> toOpen = <String>[];
+    if (floatingData is List && _windowing.supportsDetach) {
+      for (final Object? entry in floatingData) {
+        if (entry is! Map) continue;
+        final Object? id = entry['id'];
+        final Object? sideName = entry['side'];
+        if (id is! String || sideName is! String) continue;
+        final DockSide? side = _sideByName(sideName);
+        final PanelDescriptor? descriptor = _descriptors[id];
+        if (side == null || descriptor == null || !descriptor.detachable) continue;
+        if (placed.contains(id) || isFloating(id)) continue;
+        _floatingOrigin[id] = _Origin(side: side);
+        toOpen.add(id);
+      }
+    }
+
     // Don't lose registered, non-floating panels that weren't in the layout.
     final List<String> orphans = <String>[
       for (final String id in known)
@@ -1180,6 +1260,16 @@ class PanelManager extends ChangeNotifier {
       c.groups.last.activeId ??= orphans.first;
     }
     notifyListeners();
+    for (final String id in toOpen) {
+      _windowing.open(_descriptors[id]!, origin: _floatingOrigin[id]!.side);
+    }
+  }
+
+  static DockSide? _sideByName(String name) {
+    for (final DockSide side in DockSide.values) {
+      if (side.name == name) return side;
+    }
+    return null;
   }
 
   /// Reads and applies a layout from `config.storage`, if any. Call after
